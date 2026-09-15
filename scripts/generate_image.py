@@ -1,442 +1,867 @@
 #!/usr/bin/env python3
-"""统一图像生成脚本，同时兼容 OpenAI 同步 API 和 apimart.ai 异步 API。
+"""
+Amazon Listing Image Generation Engine - V2.6
 
-自动检测模式：
-  - 基础 URL 包含 "apimart" → 异步轮询模式
-  - 其他 → OpenAI 同步模式
-  - 也可通过 --mode sync|async 强制指定
+Purpose
+-------
+Generate Amazon Listing images from the prompts produced by
+prompt_builder_v2.5.2.py.
 
-配置来自环境变量或 .env 文件：
-- IMG_BASE_URL: API 根地址
-- IMG_MODEL: 图片模型名
-- IMG_API_KEY: API key
-- IMG_API_MODE（可选）: sync 或 async，覆盖自动检测
+Pipeline
+--------
+listing_plan.json + H1-H5 prompts
+        -> provider adapter
+        -> image generation
+        -> generated-images/H1-H5
+
+Design goals
+------------
+- No WebUI / FastAPI / database.
+- OpenAI-compatible image API first.
+- Provider configuration comes from environment variables.
+- Supports single-image and batch generation.
+- Supports product reference images.
+- Keeps generation metadata for later Image QA.
+- Does not invent or modify prompts.
+- If provider configuration is missing, fails with a useful message
+  instead of silently producing a fake result.
+
+Environment
+-----------
+IMG_BASE_URL=https://api.openai.com/v1
+IMG_MODEL=gpt-image-1.5
+IMG_API_KEY=your_key
+
+Optional:
+IMG_SIZE=1536x1024
+IMG_QUALITY=high
+IMG_OUTPUT_FORMAT=png
+IMG_TIMEOUT=180
+IMG_MAX_RETRIES=2
+
+Usage
+-----
+python scripts/generate_image.py scripts/listing_plan.json
+python scripts/generate_image.py scripts/listing_plan.json --images H1,H3
+python scripts/generate_image.py scripts/listing_plan.json --prompt-dir generated-prompts
+python scripts/generate_image.py scripts/listing_plan.json --dry-run
+python scripts/generate_image.py scripts/listing_plan.json --reference-dir data/product
+
+The script intentionally keeps the provider layer small so that a
+future Doubao / Gemini / other adapter can be added without changing
+the Listing planning or prompt-generation layer.
 """
 
 from __future__ import annotations
 
 import argparse
 import base64
-import binascii
-import http.client
 import json
 import os
+import re
 import sys
 import time
 import urllib.error
-import urllib.parse
 import urllib.request
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 
-ENV_BASE_URL = "IMG_BASE_URL"
-ENV_MODEL = "IMG_MODEL"
-ENV_API_KEY = "IMG_API_KEY"
-ENV_ALIASES = {
-    ENV_BASE_URL: ("OPENAI_BASE_URL", "OPENAI_API_BASE", "BASE_URL"),
-    ENV_MODEL: ("OPENAI_IMAGE_MODEL", "IMAGE_MODEL", "OPENAI_MODEL"),
-    ENV_API_KEY: ("OPENAI_API_KEY", "API_KEY"),
-}
+VERSION = "2.6.1"
 
-VALID_RATIOS = ("auto", "1:1", "3:2", "2:3", "4:3", "3:4", "5:4", "4:5",
-                "16:9", "9:16", "2:1", "1:2", "21:9", "9:21")
-VALID_RESOLUTIONS = ("1k", "2k", "4k")
+ROLE_ORDER = ["H1", "H2", "H3", "H4", "H5"]
 
-PIXEL_TO_RATIO: dict[str, str] = {
-    "1024x1024": "1:1", "2048x2048": "1:1",
-    "1536x1024": "3:2", "2048x1360": "3:2",
-    "1024x1536": "2:3", "1360x2048": "2:3",
-    "1024x768": "4:3", "2048x1536": "4:3",
-    "768x1024": "3:4", "1536x2048": "3:4",
-    "1280x1024": "5:4", "2560x2048": "5:4",
-    "1024x1280": "4:5", "2048x2560": "4:5",
-    "1536x864": "16:9", "2048x1152": "16:9", "3840x2160": "16:9",
-    "864x1536": "9:16", "1152x2048": "9:16", "2160x3840": "9:16",
-    "2048x1024": "2:1", "2688x1344": "2:1", "3840x1920": "2:1",
-    "1024x2048": "1:2", "1344x2688": "1:2", "1920x3840": "1:2",
-    "2016x864": "21:9", "2688x1152": "21:9", "3840x1648": "21:9",
-    "864x2016": "9:21", "1152x2688": "9:21", "1648x3840": "9:21",
-}
-
-UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+DEFAULT_BASE_URL = "https://api.openai.com/v1"
+DEFAULT_MODEL = "gpt-image-1.5"
+DEFAULT_SIZE = "1536x1024"
+DEFAULT_QUALITY = "high"
+DEFAULT_OUTPUT_FORMAT = "png"
+DEFAULT_TIMEOUT = 180
+DEFAULT_MAX_RETRIES = 2
 
 
-def fail(message: str, exit_code: int = 1) -> None:
-    print(f"错误：{message}", file=sys.stderr)
-    raise SystemExit(exit_code)
+class GenerationError(RuntimeError):
+    """Raised for provider or local generation failures."""
 
 
-# ── 配置与环境 ──────────────────────────────────────────────
-
-def read_prompt(args: argparse.Namespace) -> str:
-    if args.prompt:
-        prompt = args.prompt.strip()
-    else:
-        try:
-            prompt = Path(args.prompt_file).read_text(encoding="utf-8").strip()
-        except OSError as exc:
-            fail(f"无法读取 prompt 文件：{exc}")
-    if not prompt:
-        fail("prompt 不能为空。")
-    return prompt
+@dataclass
+class ProviderConfig:
+    base_url: str
+    model: str
+    api_key: str
+    size: str
+    quality: str
+    output_format: str
+    timeout: int
+    max_retries: int
 
 
-def strip_env_value(value: str) -> str:
-    value = value.strip()
-    if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
-        return value[1:-1]
-    return value
+@dataclass
+class GenerationResult:
+    role: str
+    output_path: Path
+    provider: str
+    model: str
+    elapsed_seconds: float
+    response_format: str
 
 
-def find_default_env_file() -> Path | None:
-    for directory in (Path.cwd(), *Path.cwd().parents):
-        env_file = directory / ".env"
-        if env_file.is_file():
-            return env_file
-    return None
-
-
-def load_env_file(env_file: Path | None) -> None:
-    if env_file is None:
-        return
-    try:
-        lines = env_file.read_text(encoding="utf-8").splitlines()
-    except OSError as exc:
-        fail(f"无法读取 .env 文件：{exc}")
-    for line_number, raw_line in enumerate(lines, start=1):
-        line = raw_line.strip()
-        if not line or line.startswith("#"):
-            continue
-        if line.startswith("export "):
-            line = line[len("export "):].strip()
-        if "=" not in line:
-            fail(f".env 第 {line_number} 行格式不正确，应为 KEY=value。")
-        key, value = line.split("=", 1)
-        key = key.strip()
-        if not key:
-            fail(f".env 第 {line_number} 行缺少变量名。")
-        if key not in os.environ:
-            os.environ[key] = strip_env_value(value)
-
-
-def require_config(name: str) -> str:
-    candidates = (name, *ENV_ALIASES.get(name, ()))
-    for candidate in candidates:
-        value = os.environ.get(candidate, "").strip()
+def env_first(*names: str, default: str = "") -> str:
+    for name in names:
+        value = os.getenv(name)
         if value:
             return value
-    accepted = "、".join(candidates)
-    fail(
-        f"缺少配置 {name}。请在 .env 中设置 IMG_BASE_URL、IMG_MODEL、IMG_API_KEY；"
-        f"也兼容这些变量名：{accepted}。"
+    return default
+
+
+def load_json(path: Path) -> Dict[str, Any]:
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError as exc:
+        raise GenerationError(f"File not found: {path}") from exc
+    except json.JSONDecodeError as exc:
+        raise GenerationError(f"Invalid JSON: {path}: {exc}") from exc
+
+
+def save_json(path: Path, data: Any) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(data, ensure_ascii=False, indent=2),
+        encoding="utf-8",
     )
 
 
-# ── 模式检测 ──────────────────────────────────────────────
-
-def detect_mode(base_url: str, explicit_mode: str | None) -> str:
-    if explicit_mode in ("sync", "async"):
-        return explicit_mode
-    if "apimart" in base_url.lower():
-        return "async"
-    return "sync"
-
-
-def size_to_ratio(size: str) -> str:
-    if ":" in size:
-        return size
-    lower = size.lower()
-    if lower in PIXEL_TO_RATIO:
-        return PIXEL_TO_RATIO[lower]
-    fail(f"无法将像素尺寸 '{size}' 转换为比例。请直接使用比例格式，如 1:1、16:9、2:3。")
-
-
-# ── 图片编码 ──────────────────────────────────────────────
-
-def encode_image_object(image_path: str) -> dict[str, str]:
-    path = Path(image_path)
-    if not path.is_file():
-        fail(f"参考图片不存在：{image_path}")
-    suffix = path.suffix.lower().lstrip(".")
-    mime_map = {"png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg",
-                "webp": "image/webp", "gif": "image/gif"}
-    mime = mime_map.get(suffix)
-    if not mime:
-        fail(f"不支持的图片格式：.{suffix}，仅支持 png/jpg/jpeg/webp/gif。")
+def read_text(path: Path) -> str:
     try:
-        data = path.read_bytes()
-    except OSError as exc:
-        fail(f"无法读取参考图片：{exc}")
-    return {"type": mime, "data": base64.b64encode(data).decode("ascii")}
+        return path.read_text(encoding="utf-8").strip()
+    except FileNotFoundError as exc:
+        raise GenerationError(f"Prompt file not found: {path}") from exc
 
 
-def encode_image_data_uri(image_path: str) -> str:
-    path = Path(image_path)
-    if not path.is_file():
-        fail(f"参考图片不存在：{image_path}")
-    suffix = path.suffix.lower().lstrip(".")
-    mime_map = {"png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg",
-                "webp": "image/webp", "gif": "image/gif"}
-    mime = mime_map.get(suffix)
-    if not mime:
-        fail(f"不支持的图片格式：.{suffix}，仅支持 png/jpg/jpeg/webp/gif。")
+def safe_slug(value: str, fallback: str = "image") -> str:
+    value = value.strip().lower()
+    value = re.sub(r"[^a-z0-9._-]+", "-", value)
+    value = value.strip("-._")
+    return value or fallback
+
+
+def role_from_filename(path: Path) -> Optional[str]:
+    match = re.match(r"^(H[1-5])(?:[-_. ].*)?\.txt$", path.name, re.I)
+    return match.group(1).upper() if match else None
+
+
+def load_prompts(prompt_dir: Path, roles: Iterable[str]) -> Dict[str, Tuple[Path, str]]:
+    found: Dict[str, Tuple[Path, str]] = {}
+
+    if not prompt_dir.exists():
+        raise GenerationError(f"Prompt directory not found: {prompt_dir}")
+
+    for path in sorted(prompt_dir.glob("*.txt")):
+        role = role_from_filename(path)
+        if role and role in roles:
+            found[role] = (path, read_text(path))
+
+    missing = [role for role in roles if role not in found]
+    if missing:
+        available = ", ".join(sorted(found)) or "none"
+        raise GenerationError(
+            f"Missing prompt files for {', '.join(missing)}. "
+            f"Found: {available}. Expected H1.txt ... H5.txt."
+        )
+
+    return found
+
+
+def discover_prompt_dir(plan_path: Path, explicit: Optional[str]) -> Path:
+    if explicit:
+        return Path(explicit)
+
+    candidates = [
+        plan_path.parent,
+        plan_path.parent / "prompts",
+        plan_path.parent / "generated-prompts",
+        plan_path.parent.parent / "generated-prompts",
+        Path("generated-prompts"),
+        Path("prompts"),
+    ]
+
+    for candidate in candidates:
+        if not candidate.exists():
+            continue
+        roles = {
+            role_from_filename(p)
+            for p in candidate.glob("*.txt")
+            if role_from_filename(p)
+        }
+        if {"H1", "H2", "H3", "H4", "H5"} <= roles:
+            return candidate
+
+    # Returning the first sensible location gives a useful error message.
+    return candidates[0]
+
+
+def resolve_output_dir(plan_path: Path, explicit: Optional[str]) -> Path:
+    if explicit:
+        return Path(explicit)
+    return plan_path.parent.parent / "generated-images"
+
+
+def get_provider_config() -> ProviderConfig:
+    api_key = env_first("IMG_API_KEY", "OPENAI_API_KEY")
+    base_url = env_first("IMG_BASE_URL", "OPENAI_BASE_URL", default=DEFAULT_BASE_URL)
+    model = env_first("IMG_MODEL", "OPENAI_IMAGE_MODEL", default=DEFAULT_MODEL)
+
     try:
-        data = path.read_bytes()
-    except OSError as exc:
-        fail(f"无法读取参考图片：{exc}")
-    b64 = base64.b64encode(data).decode("ascii")
-    return f"data:{mime};base64,{b64}"
+        timeout = int(os.getenv("IMG_TIMEOUT", str(DEFAULT_TIMEOUT)))
+    except ValueError:
+        timeout = DEFAULT_TIMEOUT
 
+    try:
+        max_retries = int(os.getenv("IMG_MAX_RETRIES", str(DEFAULT_MAX_RETRIES)))
+    except ValueError:
+        max_retries = DEFAULT_MAX_RETRIES
 
-# ── HTTP 工具 ──────────────────────────────────────────────
-
-def http_post(url: str, api_key: str, payload: dict[str, Any], timeout: int = 120) -> dict[str, Any]:
-    body = json.dumps(payload).encode("utf-8")
-    request = urllib.request.Request(
-        url, data=body,
-        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json", "User-Agent": UA},
-        method="POST",
+    return ProviderConfig(
+        base_url=base_url.rstrip("/"),
+        model=model,
+        api_key=api_key,
+        size=os.getenv("IMG_SIZE", DEFAULT_SIZE),
+        quality=os.getenv("IMG_QUALITY", DEFAULT_QUALITY),
+        output_format=os.getenv("IMG_OUTPUT_FORMAT", DEFAULT_OUTPUT_FORMAT),
+        timeout=max(1, timeout),
+        max_retries=max(0, max_retries),
     )
-    try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
-            raw = response.read().decode("utf-8")
-    except urllib.error.HTTPError as exc:
-        detail = exc.read().decode("utf-8", errors="replace")
-        fail(f"接口返回 HTTP {exc.code}：{detail}")
-    except urllib.error.URLError as exc:
-        fail(f"无法连接接口：{exc.reason}")
-    except (http.client.RemoteDisconnected, TimeoutError):
-        fail("接口连接失败或超时，请稍后重试。")
-    try:
-        parsed = json.loads(raw)
-    except json.JSONDecodeError:
-        fail(f"接口返回的不是有效 JSON：{raw[:500]}")
-    if not isinstance(parsed, dict):
-        fail("接口返回格式不正确：顶层结果不是对象。")
-    return parsed
 
 
-def http_get(url: str, api_key: str, timeout: int = 30) -> dict[str, Any]:
-    request = urllib.request.Request(
-        url, headers={"Authorization": f"Bearer {api_key}", "User-Agent": UA}, method="GET",
-    )
-    try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
-            raw = response.read().decode("utf-8")
-    except urllib.error.HTTPError as exc:
-        detail = exc.read().decode("utf-8", errors="replace")
-        fail(f"查询接口返回 HTTP {exc.code}：{detail}")
-    except (urllib.error.URLError, http.client.RemoteDisconnected, TimeoutError):
-        fail("查询接口连接失败或超时。")
-    try:
-        parsed = json.loads(raw)
-    except json.JSONDecodeError:
-        fail(f"查询接口返回的不是有效 JSON：{raw[:500]}")
-    return parsed
+def detect_provider(base_url: str) -> str:
+    host = re.sub(r"^https?://", "", base_url).split("/")[0].lower()
+
+    if "openai.com" in host:
+        return "openai"
+    if "volces.com" in host or "doubao" in host:
+        return "doubao-compatible"
+    if "googleapis.com" in host:
+        return "google-compatible"
+    return "openai-compatible"
 
 
-# ── 同步模式（OpenAI 兼容）──────────────────────────────────
-
-def build_sync_payload(args: argparse.Namespace, prompt: str, model: str) -> dict[str, Any]:
-    payload: dict[str, Any] = {"model": model, "prompt": prompt, "n": args.n, "size": args.size}
-    if args.quality:
-        payload["quality"] = args.quality
-    if args.image:
-        payload["image_urls"] = [encode_image_data_uri(args.image)]
-    return payload
+def normalize_image_endpoint(base_url: str) -> str:
+    if base_url.endswith("/images/generations"):
+        return base_url
+    return f"{base_url}/images/generations"
 
 
-def run_sync(base_url: str, api_key: str, payload: dict[str, Any],
-             output_dir: Path, fmt: str) -> list[Path]:
-    endpoint = f"{base_url}/images/generations"
-    print(f"[sync] 提交生成请求到 {endpoint}...", file=sys.stderr)
-    result = http_post(endpoint, api_key, payload, timeout=120)
-    return save_sync_images(result, output_dir, fmt)
+def encode_image_file(path: Path) -> str:
+    suffix = path.suffix.lower()
+    mime = {
+        ".png": "image/png",
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".webp": "image/webp",
+    }.get(suffix, "application/octet-stream")
+
+    data = base64.b64encode(path.read_bytes()).decode("ascii")
+    return f"data:{mime};base64,{data}"
 
 
-def filename_for(suffix: str) -> str:
-    timestamp = time.strftime("%Y%m%d-%H%M%S")
-    return f"image-{timestamp}-01.{suffix.lstrip('.')}"
+def is_image_file(path: Path) -> bool:
+    return path.suffix.lower() in {".png", ".jpg", ".jpeg", ".webp"}
 
 
-def save_sync_images(result: dict[str, Any], output_dir: Path, fmt: str) -> list[Path]:
-    data = result.get("data")
-    if not isinstance(data, list) or not data:
-        fail(f"接口返回中没有 data 图片数组：{json.dumps(result)[:300]}")
-    output_dir.mkdir(parents=True, exist_ok=True)
-    paths: list[Path] = []
-    for index, item in enumerate(data):
-        if not isinstance(item, dict):
-            fail("接口返回格式不正确：data 中包含非对象项目。")
-        if item.get("b64_json"):
-            encoded = item["b64_json"]
-            try:
-                image_bytes = base64.b64decode(encoded)
-            except (binascii.Error, ValueError) as exc:
-                fail(f"无法解码 b64_json 图片：{exc}")
-            timestamp = time.strftime("%Y%m%d-%H%M%S")
-            p = output_dir / f"image-{timestamp}-{index + 1:02d}.{fmt.lstrip('.')}"
-            p.write_bytes(image_bytes)
-            paths.append(p)
-        elif item.get("url"):
-            image_url = item["url"]
-            suffix = _suffix_from_url(image_url, fmt)
-            timestamp = time.strftime("%Y%m%d-%H%M%S")
-            p = output_dir / f"image-{timestamp}-{index + 1:02d}.{suffix}"
-            dl_req = urllib.request.Request(image_url, headers={"User-Agent": UA})
-            with urllib.request.urlopen(dl_req, timeout=120) as resp:
-                p.write_bytes(resp.read())
-            paths.append(p)
-        else:
-            fail("图片结果既没有 b64_json，也没有 url。")
-    return paths
+def find_reference_images(plan: Dict[str, Any], plan_path: Path) -> List[Path]:
+    """
+    Resolve product reference images conservatively.
 
+    Priority:
+    1. Explicit image/reference fields in listing_plan.json.
+    2. Conventional data/product/ directory.
+    3. Conventional data/ directory image files.
 
-# ── 异步模式（apimart.ai）──────────────────────────────────
+    The resolver never sends arbitrary project images when an explicit
+    reference is available. This keeps product identity control predictable.
+    """
+    candidates: List[str] = []
 
-def build_async_payload(args: argparse.Namespace, prompt: str, model: str) -> dict[str, Any]:
-    ratio = size_to_ratio(args.size)
-    payload: dict[str, Any] = {"model": model, "prompt": prompt, "n": 1, "size": ratio, "resolution": args.resolution}
-    if args.image:
-        payload["image_urls"] = [encode_image_data_uri(args.image)]
-    return payload
+    def collect(value: Any) -> None:
+        if isinstance(value, str):
+            candidates.append(value)
+        elif isinstance(value, list):
+            for item in value:
+                collect(item)
+        elif isinstance(value, dict):
+            for key, item in value.items():
+                key_l = str(key).lower()
+                if any(
+                    token in key_l
+                    for token in (
+                        "reference_image",
+                        "reference_images",
+                        "image_path",
+                        "image_paths",
+                        "product_image",
+                        "product_images",
+                        "source_image",
+                        "source_images",
+                    )
+                ):
+                    collect(item)
 
+    collect(plan)
 
-def run_async(base_url: str, api_key: str, payload: dict[str, Any],
-              output_dir: Path, fmt: str, poll_interval: int, timeout: int) -> list[Path]:
-    endpoint = f"{base_url}/images/generations"
-    print(f"[async] 提交异步任务到 {endpoint}...", file=sys.stderr)
-    result = http_post(endpoint, api_key, payload, timeout=30)
+    results: List[Path] = []
+    seen = set()
 
-    code = result.get("code")
-    if code and code != 200:
-        error = result.get("error", {})
-        fail(f"提交失败（code={code}）：{error.get('message', json.dumps(result))}")
+    def add_path(raw: str) -> None:
+        path = Path(raw)
+        if not path.is_absolute():
+            path = plan_path.parent / path
+        path = path.resolve()
 
-    data = result.get("data")
-    if not isinstance(data, list) or not data:
-        fail(f"提交响应缺少 data 数组：{json.dumps(result)[:300]}")
-    task_id = data[0].get("task_id")
-    if not task_id:
-        fail(f"提交响应缺少 task_id：{json.dumps(data[0])[:300]}")
+        if path.exists() and path.is_file() and is_image_file(path):
+            key = str(path)
+            if key not in seen:
+                seen.add(key)
+                results.append(path)
 
-    print(f"[async] 任务已提交: {task_id}，等待 15s 后开始轮询...", file=sys.stderr)
-    time.sleep(15)
+    # Explicit Listing Plan references always win.
+    for raw in candidates:
+        add_path(raw)
 
-    task_data = _poll_task(base_url, api_key, task_id, poll_interval, timeout)
-    actual_time = task_data.get("actual_time", 0)
-    cost = task_data.get("cost", 0)
-    print(f"[async] 任务完成，耗时 {actual_time}s，费用 ${cost:.4f}", file=sys.stderr)
+    if results:
+        return results
 
-    return _save_async_images(task_data, output_dir, fmt)
+    # Standalone project convention:
+    # Listing Generator/data/product/*
+    conventional_dirs = [
+        plan_path.parent / "product",
+        plan_path.parent / "data" / "product",
+        plan_path.parent.parent / "data" / "product",
+        Path("data") / "product",
+    ]
 
+    for directory in conventional_dirs:
+        if not directory.exists() or not directory.is_dir():
+            continue
 
-def _poll_task(base_url: str, api_key: str, task_id: str,
-               poll_interval: int, timeout: int) -> dict[str, Any]:
-    url = f"{base_url}/tasks/{task_id}"
-    start = time.time()
-    while True:
-        elapsed = time.time() - start
-        if elapsed > timeout:
-            fail(f"任务 {task_id} 超时（{timeout}s），请稍后手动查询。")
-        result = http_get(url, api_key)
-        task_data = result.get("data", {})
-        status = task_data.get("status", "")
-        if status == "completed":
-            return task_data
-        if status == "failed":
-            error = task_data.get("error", {})
-            fail(f"任务 {task_id} 失败：{error.get('message', json.dumps(task_data)[:300])}")
-        progress = task_data.get("progress", 0)
-        print(f"  轮询中... 状态={status} 进度={progress}% 耗时={elapsed:.0f}s", file=sys.stderr)
-        time.sleep(poll_interval)
+        for path in sorted(directory.iterdir()):
+            if path.is_file() and is_image_file(path):
+                add_path(str(path))
 
+        if results:
+            return results
 
-def _save_async_images(task_data: dict[str, Any], output_dir: Path, fmt: str) -> list[Path]:
-    result = task_data.get("result", {})
-    images = result.get("images")
-    if not isinstance(images, list) or not images:
-        fail(f"任务结果中缺少 images 数组：{json.dumps(task_data)[:300]}")
-    output_dir.mkdir(parents=True, exist_ok=True)
-    paths: list[Path] = []
-    for img_item in images:
-        url_list = img_item.get("url")
-        if not isinstance(url_list, list) or not url_list:
-            fail(f"图片结果缺少 url 数组：{json.dumps(img_item)[:300]}")
-        image_url = url_list[0]
-        suffix = _suffix_from_url(image_url, fmt)
-        output_path = output_dir / filename_for(suffix)
-        print(f"  下载图片: {image_url}", file=sys.stderr)
-        dl_req = urllib.request.Request(image_url, headers={"User-Agent": UA})
-        try:
-            with urllib.request.urlopen(dl_req, timeout=120) as resp:
-                output_path.write_bytes(resp.read())
-        except urllib.error.URLError as exc:
-            fail(f"无法下载图片：{exc.reason}")
-        except TimeoutError:
-            fail("下载图片超时。")
-        paths.append(output_path)
-    return paths
+    # Last conservative fallback: only direct image files in data/.
+    conventional_data_dirs = [
+        plan_path.parent / "data",
+        plan_path.parent.parent / "data",
+        Path("data"),
+    ]
 
+    for directory in conventional_data_dirs:
+        if not directory.exists() or not directory.is_dir():
+            continue
 
-# ── 工具函数 ──────────────────────────────────────────────
+        for path in sorted(directory.iterdir()):
+            if path.is_file() and is_image_file(path):
+                add_path(str(path))
 
-def _suffix_from_url(url: str, fallback: str) -> str:
-    path = urllib.parse.urlparse(url).path
-    suffix = Path(path).suffix.lower().lstrip(".")
-    if suffix in {"png", "jpg", "jpeg", "webp"}:
-        return "jpg" if suffix == "jpeg" else suffix
-    return fallback
+        if results:
+            return results
 
+    return results
 
-# ── CLI ──────────────────────────────────────────────
+def extract_product_name(plan: Dict[str, Any]) -> str:
+    paths = [
+        ("product", "name"),
+        ("product", "product_name"),
+        ("product_name",),
+        ("product", "title"),
+        ("title",),
+    ]
 
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
-        description="统一图像生成脚本，自动兼容 OpenAI 同步 API 和 apimart.ai 异步 API。"
-    )
-    prompt_group = parser.add_mutually_exclusive_group(required=True)
-    prompt_group.add_argument("--prompt", help="直接传入图片生成 Prompt。")
-    prompt_group.add_argument("--prompt-file", help="从文本文件读取图片生成 Prompt。")
-    parser.add_argument("--output-dir", default="generated-images", help="图片输出目录，默认 generated-images。")
-    parser.add_argument("--env-file", help="指定 .env 配置文件；不指定时从当前目录向上查找。")
-    parser.add_argument("--mode", choices=("sync", "async"), help="API 模式。不指定时根据 base URL 自动检测（含 apimart → async，其他 → sync）。")
-    parser.add_argument("--size", default="1:1", help="图片尺寸。异步模式用比例格式（1:1、16:9 等），同步模式用像素格式（1024x1024 等）。默认 1:1。")
-    parser.add_argument("--resolution", default="2k", choices=VALID_RESOLUTIONS, help="异步模式分辨率档位，默认 2k。")
-    parser.add_argument("--quality", help="同步模式图片质量参数，例如 low、medium、high。")
-    parser.add_argument("--n", type=int, default=1, help="同步模式生成图片数量，默认 1。")
-    parser.add_argument("--image", help="参考产品图片路径，传入以提升产品一致性。")
-    parser.add_argument("--poll-interval", type=int, default=5, help="异步模式轮询间隔秒数，默认 5。")
-    parser.add_argument("--timeout", type=int, default=180, help="异步模式轮询超时秒数，默认 180。")
-    parser.add_argument("--format", choices=("png", "jpeg", "webp"), default="png", help="图片保存格式，默认 png。")
-    return parser.parse_args()
-
-
-def main() -> None:
-    args = parse_args()
-    env_file = Path(args.env_file) if args.env_file else find_default_env_file()
-    load_env_file(env_file)
-    prompt = read_prompt(args)
-    base_url = require_config(ENV_BASE_URL).rstrip("/")
-    model = require_config(ENV_MODEL)
-    api_key = require_config(ENV_API_KEY)
-
-    mode = detect_mode(base_url, args.mode)
-    print(f"API 模式: {mode} | base_url={base_url} | model={model}", file=sys.stderr)
-
-    if mode == "async":
-        payload = build_async_payload(args, prompt, model)
-        paths = run_async(base_url, api_key, payload, Path(args.output_dir),
-                          args.format, args.poll_interval, args.timeout)
-    else:
-        payload = build_sync_payload(args, prompt, model)
-        paths = run_sync(base_url, api_key, payload, Path(args.output_dir), args.format)
-
-    print("生成完成：")
     for path in paths:
-        print(path)
+        value: Any = plan
+        for key in path:
+            if not isinstance(value, dict):
+                value = None
+                break
+            value = value.get(key)
+
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+
+    return "Amazon Listing Product"
+
+
+
+class ImageProviderAdapter:
+    """
+    Small provider boundary.
+
+    V2.6.1 keeps OpenAI-compatible generation as the default implementation.
+    Provider-specific reference-image schemas should be implemented here,
+    rather than mixed into Listing Plan / Prompt Builder logic.
+    """
+
+    name = "openai-compatible"
+
+    def __init__(self, config: ProviderConfig):
+        self.config = config
+
+    def endpoint(self) -> str:
+        return normalize_image_endpoint(self.config.base_url)
+
+    def build_payload(
+        self,
+        prompt: str,
+        reference_images: List[Path],
+    ) -> Dict[str, Any]:
+        return build_request_payload(
+            prompt,
+            self.config,
+            reference_images,
+        )
+
+
+def get_provider_adapter(config: ProviderConfig) -> ImageProviderAdapter:
+    provider = detect_provider(config.base_url)
+
+    # Explicit adapter boundary for future provider implementations.
+    # For now, all unknown providers use the compatible JSON adapter.
+    if provider in {"openai", "openai-compatible", "doubao-compatible", "google-compatible"}:
+        return ImageProviderAdapter(config)
+
+    return ImageProviderAdapter(config)
+
+
+def build_request_payload(
+    prompt: str,
+    config: ProviderConfig,
+    reference_images: List[Path],
+) -> Dict[str, Any]:
+    """
+    Build an OpenAI-compatible /images/generations request.
+
+    Reference images are passed in the prompt as data URLs only when
+    the provider's generation endpoint accepts them through the input
+    field. Some providers use a different schema; the adapter boundary
+    is intentionally isolated here for future provider-specific support.
+    """
+    payload: Dict[str, Any] = {
+        "model": config.model,
+        "prompt": prompt,
+        "size": config.size,
+        "quality": config.quality,
+        "n": 1,
+    }
+
+    # OpenAI-compatible providers that support image references may accept
+    # an input/reference field. We do not force it unless a reference exists.
+    if reference_images:
+        payload["input_images"] = [encode_image_file(p) for p in reference_images]
+
+    return payload
+
+
+def request_json(
+    url: str,
+    payload: Dict[str, Any],
+    config: ProviderConfig,
+) -> Dict[str, Any]:
+    if not config.api_key:
+        raise GenerationError(
+            "IMG_API_KEY is not configured. "
+            "Set IMG_API_KEY (or OPENAI_API_KEY) before generation."
+        )
+
+    body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+
+    request = urllib.request.Request(
+        url=url,
+        data=body,
+        method="POST",
+        headers={
+            "Authorization": f"Bearer {config.api_key}",
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+        },
+    )
+
+    try:
+        with urllib.request.urlopen(request, timeout=config.timeout) as response:
+            raw = response.read().decode("utf-8")
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")
+        raise GenerationError(
+            f"Image API HTTP {exc.code}: {detail[:3000]}"
+        ) from exc
+    except urllib.error.URLError as exc:
+        raise GenerationError(
+            f"Image API connection failed: {exc.reason}"
+        ) from exc
+    except TimeoutError as exc:
+        raise GenerationError("Image API request timed out.") from exc
+
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise GenerationError(
+            f"Image API returned non-JSON response: {raw[:1000]}"
+        ) from exc
+
+
+def decode_generated_image(data: Dict[str, Any]) -> Tuple[bytes, str]:
+    """
+    Extract the first image from common OpenAI-compatible responses.
+
+    Supported:
+    - data[0].b64_json
+    - data[0].url
+
+    URL fetching is intentionally done with the same authorization-free
+    public URL returned by the provider.
+    """
+    items = data.get("data")
+    if not isinstance(items, list) or not items:
+        raise GenerationError(
+            "Image API response contains no data[]. "
+            f"Response keys: {list(data.keys())}"
+        )
+
+    first = items[0]
+    if not isinstance(first, dict):
+        raise GenerationError("Image API data[0] is not an object.")
+
+    b64 = first.get("b64_json")
+    if isinstance(b64, str) and b64:
+        try:
+            return base64.b64decode(b64), "b64_json"
+        except Exception as exc:
+            raise GenerationError("Invalid b64_json image data.") from exc
+
+    url = first.get("url")
+    if isinstance(url, str) and url:
+        try:
+            with urllib.request.urlopen(url, timeout=60) as response:
+                return response.read(), "url"
+        except Exception as exc:
+            raise GenerationError(
+                f"Could not download generated image URL: {exc}"
+            ) from exc
+
+    raise GenerationError(
+        "Image API response does not contain b64_json or url."
+    )
+
+
+def generate_one(
+    role: str,
+    prompt: str,
+    config: ProviderConfig,
+    output_path: Path,
+    reference_images: List[Path],
+) -> GenerationResult:
+    adapter = get_provider_adapter(config)
+    endpoint = adapter.endpoint()
+    provider = detect_provider(config.base_url)
+
+    payload = adapter.build_payload(prompt, reference_images)
+
+    last_error: Optional[Exception] = None
+    started = time.perf_counter()
+
+    for attempt in range(config.max_retries + 1):
+        try:
+            response = request_json(endpoint, payload, config)
+            image_bytes, response_format = decode_generated_image(response)
+
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            output_path.write_bytes(image_bytes)
+
+            elapsed = time.perf_counter() - started
+
+            return GenerationResult(
+                role=role,
+                output_path=output_path,
+                provider=provider,
+                model=config.model,
+                elapsed_seconds=round(elapsed, 2),
+                response_format=response_format,
+            )
+
+        except GenerationError as exc:
+            last_error = exc
+            if attempt < config.max_retries:
+                wait = min(2 ** attempt, 8)
+                print(
+                    f"  [retry {attempt + 1}/{config.max_retries}] "
+                    f"{exc}. Waiting {wait}s..."
+                )
+                time.sleep(wait)
+
+    raise GenerationError(
+        f"{role} generation failed after {config.max_retries + 1} attempts: "
+        f"{last_error}"
+    )
+
+
+def role_prompt_path(prompt_dir: Path, role: str) -> Path:
+    candidates = [
+        prompt_dir / f"{role}.txt",
+        prompt_dir / f"{role.lower()}.txt",
+    ]
+
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+
+    matches = [
+        p for p in prompt_dir.glob("*.txt")
+        if role_from_filename(p) == role
+    ]
+    if matches:
+        return sorted(matches)[0]
+
+    raise GenerationError(f"Cannot locate prompt file for {role}.")
+
+
+def build_generation_manifest(
+    plan_path: Path,
+    output_dir: Path,
+    config: ProviderConfig,
+    product_name: str,
+    reference_images: List[Path],
+    results: List[GenerationResult],
+    failures: Dict[str, str],
+) -> Dict[str, Any]:
+    return {
+        "generator": "Amazon Listing Image Generation Engine",
+        "version": VERSION,
+        "generated_at_epoch": int(time.time()),
+        "listing_plan": str(plan_path),
+        "product": product_name,
+        "provider": detect_provider(config.base_url),
+        "model": config.model,
+        "size": config.size,
+        "quality": config.quality,
+        "output_format": config.output_format,
+        "reference_images": [str(p) for p in reference_images],
+        "output_dir": str(output_dir),
+        "results": [
+            {
+                "role": r.role,
+                "path": str(r.output_path),
+                "provider": r.provider,
+                "model": r.model,
+                "elapsed_seconds": r.elapsed_seconds,
+                "response_format": r.response_format,
+            }
+            for r in results
+        ],
+        "failures": failures,
+        "next_stage": "Image QA",
+    }
+
+
+def parse_roles(raw: Optional[str]) -> List[str]:
+    if not raw:
+        return ROLE_ORDER[:]
+
+    roles = []
+    for item in raw.split(","):
+        role = item.strip().upper()
+        if role not in ROLE_ORDER:
+            raise GenerationError(
+                f"Invalid role '{item}'. Choose from {', '.join(ROLE_ORDER)}."
+            )
+        if role not in roles:
+            roles.append(role)
+
+    return roles
+
+
+def print_config(config: ProviderConfig, provider: str) -> None:
+    print("Image Provider")
+    print(f"  provider : {provider}")
+    print(f"  endpoint : {normalize_image_endpoint(config.base_url)}")
+    print(f"  model    : {config.model}")
+    print(f"  size     : {config.size}")
+    print(f"  quality  : {config.quality}")
+    print(f"  api key  : {'configured' if config.api_key else 'MISSING'}")
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(
+        description="Generate Amazon Listing H1-H5 images from generated prompts."
+    )
+    parser.add_argument(
+        "listing_plan",
+        help="Path to normalized listing_plan.json",
+    )
+    parser.add_argument(
+        "--prompt-dir",
+        default=None,
+        help="Directory containing H1.txt ... H5.txt.",
+    )
+    parser.add_argument(
+        "--output-dir",
+        default=None,
+        help="Output directory. Defaults to ../generated-images.",
+    )
+    parser.add_argument(
+        "--images",
+        default=None,
+        help="Comma-separated roles, e.g. H1,H3,H5. Default: H1-H5.",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Validate prompts/config and show the planned generation without API calls.",
+    )
+    parser.add_argument(
+        "--no-reference",
+        action="store_true",
+        help="Do not send explicitly referenced product images to the provider.",
+    )
+    parser.add_argument(
+        "--reference-dir",
+        default=None,
+        help="Explicit product reference image directory. Overrides automatic discovery.",
+    )
+    args = parser.parse_args()
+
+    try:
+        plan_path = Path(args.listing_plan).resolve()
+        plan = load_json(plan_path)
+
+        roles = parse_roles(args.images)
+        prompt_dir = discover_prompt_dir(plan_path, args.prompt_dir)
+        output_dir = resolve_output_dir(plan_path, args.output_dir).resolve()
+        prompts = load_prompts(prompt_dir, roles)
+
+        config = get_provider_config()
+        provider = detect_provider(config.base_url)
+        product_name = extract_product_name(plan)
+
+        references = []
+        if not args.no_reference:
+            if args.reference_dir:
+                reference_dir = Path(args.reference_dir).resolve()
+                if not reference_dir.exists() or not reference_dir.is_dir():
+                    raise GenerationError(
+                        f"Reference directory not found: {reference_dir}"
+                    )
+                references = [
+                    p.resolve()
+                    for p in sorted(reference_dir.iterdir())
+                    if p.is_file() and is_image_file(p)
+                ]
+            else:
+                references = find_reference_images(plan, plan_path)
+
+        print("=" * 68)
+        print(f"Amazon Listing Image Generation Engine v{VERSION}")
+        print("=" * 68)
+        print(f"Product      : {product_name}")
+        print(f"Prompt dir   : {prompt_dir}")
+        print(f"Output dir   : {output_dir}")
+        print(f"Roles        : {', '.join(roles)}")
+        print(f"References   : {len(references)}")
+        if references:
+            print("Reference mode: explicit product-reference images detected")
+        else:
+            print("Reference mode: NONE — generation will rely on prompt only")
+        print_config(config, provider)
+
+        if args.dry_run:
+            print("\nReference images:")
+            if references:
+                for ref in references:
+                    print(f"  - {ref}")
+            else:
+                print("  - NONE")
+                print("    Put product images in data/product/ or pass --reference-dir.")
+            print("\nDRY RUN — no image API calls will be made.")
+            for role in roles:
+                path, prompt = prompts[role]
+                print(f"\n[{role}] {path}")
+                print(f"  prompt chars: {len(prompt)}")
+                print(f"  output     : {output_dir / (role + '-listing-image.png')}")
+            return 0
+
+        if not config.api_key:
+            raise GenerationError(
+                "No image API key configured. Use --dry-run to validate the pipeline "
+                "without calling the provider."
+            )
+
+        results: List[GenerationResult] = []
+        failures: Dict[str, str] = {}
+
+        print("\nGenerating...\n")
+
+        for index, role in enumerate(roles, start=1):
+            prompt_path, prompt = prompts[role]
+            output_path = output_dir / f"{role}-listing-image.{config.output_format}"
+
+            print(f"[{index}/{len(roles)}] {role}")
+            print(f"  prompt : {prompt_path.name}")
+            print(f"  output : {output_path}")
+
+            try:
+                result = generate_one(
+                    role=role,
+                    prompt=prompt,
+                    config=config,
+                    output_path=output_path,
+                    reference_images=references,
+                )
+                results.append(result)
+                print(
+                    f"  status : PASS ({result.elapsed_seconds}s, "
+                    f"{result.response_format})"
+                )
+            except GenerationError as exc:
+                failures[role] = str(exc)
+                print(f"  status : FAIL — {exc}")
+
+        manifest = build_generation_manifest(
+            plan_path=plan_path,
+            output_dir=output_dir,
+            config=config,
+            product_name=product_name,
+            reference_images=references,
+            results=results,
+            failures=failures,
+        )
+
+        manifest_path = output_dir / "generation_manifest.json"
+        save_json(manifest_path, manifest)
+
+        print("\n" + "=" * 68)
+        print("Generation Summary")
+        print("=" * 68)
+        print(f"PASS : {len(results)}")
+        print(f"FAIL : {len(failures)}")
+        print(f"Manifest: {manifest_path}")
+
+        if failures:
+            for role, message in failures.items():
+                print(f"  {role}: {message}")
+            return 2
+
+        print("\nAll requested images generated successfully.")
+        print("Next stage: Image QA")
+        return 0
+
+    except GenerationError as exc:
+        print(f"\nERROR: {exc}", file=sys.stderr)
+        return 1
+    except KeyboardInterrupt:
+        print("\nInterrupted.", file=sys.stderr)
+        return 130
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

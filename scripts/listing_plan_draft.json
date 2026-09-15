@@ -1,0 +1,238 @@
+{
+  "product": {
+    "name": "JBL Ultra-Compact Portable Speaker",
+    "category": "Consumer Electronics / Portable Audio",
+    "confirmed_features": [
+      "deep teal woven fabric-mesh exterior across the body",
+      "grey JBL logo with orange outline on the front face",
+      "matte top panel with three raised icon buttons: volume-down, play/pause, volume-up",
+      "woven fabric carry loop fixed at the top corner",
+      "compact rounded rectangular body with soft edges",
+      "dark teal colorway with tonal rubberized-look top trim"
+    ],
+    "inferred_features": [
+      "portable speaker product type, inferred from JBL branding, acoustic-mesh front and playback controls",
+      "likely Bluetooth connectivity, standard for this product type and visible control layout (unconfirmed)",
+      "compact palm-scale portability, inferred from the reference photo context (keyboard and desk items provide scale)",
+      "target users: young consumers who listen at desks, in dorms and on casual outings"
+    ],
+    "unknown_features": [
+      "wireless protocol and version",
+      "waterproof or splash resistance rating",
+      "battery capacity and playtime",
+      "output power and driver specifications",
+      "ports and buttons beyond the visible top panel",
+      "included accessories and packaging",
+      "exact dimensions and weight",
+      "official colorway name",
+      "companion app or pairing features"
+    ]
+  },
+  "selling_points": [
+    {
+      "feature": "Ultra-compact grab-and-go body",
+      "benefit": "Drops into any bag or palm, so music goes wherever the day goes",
+      "visual_proof": "Hero shot with palm-hold scale reference and loop grip",
+      "evidence_level": "visual_confirmed"
+    },
+    {
+      "feature": "Woven fabric-mesh exterior with bold JBL logo",
+      "benefit": "Textile weave and brand styling bring a premium look to any desk or shelf",
+      "visual_proof": "Macro close-up of weave texture and orange-outlined logo",
+      "evidence_level": "visual_confirmed"
+    },
+    {
+      "feature": "Top-panel playback and volume icon buttons",
+      "benefit": "Change tracks and adjust volume without reaching for a phone",
+      "visual_proof": "High-angle top view showing the three tactile buttons",
+      "evidence_level": "visual_confirmed"
+    },
+    {
+      "feature": "Integrated woven carry loop",
+      "benefit": "Hook or clip the speaker to a bag or belt for hands-free carrying",
+      "visual_proof": "Lifestyle shot with the loop hooked on a backpack strap",
+      "evidence_level": "visual_confirmed"
+    },
+    {
+      "feature": "Versatile deep-teal colorway",
+      "benefit": "A calm modern accent that fits desk, home and outdoor scenes",
+      "visual_proof": "Warm lifestyle scenes on a wooden desk and outdoors",
+      "evidence_level": "visual_confirmed"
+    }
+  ],
+  "conversion_driver": {
+    "primary": "Visual-driven",
+    "secondary": ["Emotional-value-driven"],
+    "reason": "Compact form, textile texture and bold logo make visual appeal the first hook; music-anywhere moments add emotional pull. No performance claims may be used, so pain-point proof is limited."
+  },
+  "campaign_style": {
+    "visual_direction": "Premium consumer-audio ecommerce visual system: clean commercial studio shots paired with warm minimal lifestyle scenes, textile weave as the recurring visual signature",
+    "color_palette": ["#FFFFFF", "#F7F7F5", "#2D2D2D", "#777777", "#2F5D63", "#F05A28"],
+    "temperature": "Neutral studio shots with warm lifestyle scenes",
+    "typography": "Modern geometric sans-serif; bold condensed uppercase headlines, light captions",
+    "background": "Pure white #FFFFFF studio for hero and grid; #F7F7F5 panels for infographic and macro; warm wood-desk and soft outdoor environments for lifestyle",
+    "lighting": "Soft directional studio lighting from upper left with controlled gentle shadows, consistent across the set; natural window light in lifestyle scenes",
+    "layout": "Clean grid-based ecommerce composition, consistent margins, single accent color usage, clear information hierarchy",
+    "icon_style": "Minimal thin-line icons with uniform 2px stroke in deep teal #2F5D63 on light panels",
+    "product_presentation": "Same speaker in every image: deep teal woven body, grey JBL logo with orange outline, matte top panel with three icon buttons, woven loop at the top corner; never redesign, recolor or rebrand",
+    "whitespace": "40-50% negative space; hero and grid images lean minimal",
+    "forbidden_drift": [
+      "product color shift",
+      "logo redesign or reposition",
+      "invented features, ports or specifications",
+      "mixed typography systems",
+      "inconsistent lighting direction",
+      "random props or cluttered backgrounds",
+      "promotional badges or fake certifications",
+      "text on the hero image"
+    ]
+  },
+  "images": [
+    {
+      "id": "H1",
+      "purpose": "Amazon main image - make the product instantly identifiable",
+      "template": "01-hero-image.json",
+      "template_name": "白底/纯色底产品主图",
+      "selling_point": "Ultra-compact grab-and-go body",
+      "angle": "front 3/4 view, slightly elevated",
+      "composition": "product centered on pure white, occupying about 35-40% of the frame, generous negative space on all sides",
+      "scene": "seamless pure white studio background #FFFFFF, no props",
+      "allowed_text": [],
+      "forbidden_claims": [
+        "any text or graphics",
+        "promotional badges",
+        "waterproof or battery claims",
+        "competitor branding"
+      ],
+      "negative_constraints": [
+        "no props or reflections",
+        "no color shift from deep teal",
+        "no logo alteration",
+        "no added buttons or ports",
+        "no distorted product geometry"
+      ],
+      "aspect_ratio": "1:1"
+    },
+    {
+      "id": "H2",
+      "purpose": "Core benefit - compact music that travels with you",
+      "template": "11-infographic.json",
+      "template_name": "信息图/A+Content",
+      "selling_point": "Ultra-compact grab-and-go body",
+      "angle": "front 3/4 product view with callout lines",
+      "composition": "product on the left third, three feature callout blocks on the right with thin-line icons, feature-grid variant, clear hierarchy",
+      "scene": "light #F7F7F5 panel background with subtle deep-teal accents",
+      "allowed_text": [
+        "Music In One Hand",
+        "Ultra-compact body",
+        "Carry loop",
+        "Tactile buttons"
+      ],
+      "forbidden_claims": [
+        "wireless protocol claims",
+        "battery or playtime numbers",
+        "waterproof rating",
+        "output power specifications",
+        "certification logos"
+      ],
+      "negative_constraints": [
+        "no more than three callout blocks",
+        "no fabricated spec numbers",
+        "no icons unrelated to the three labeled features",
+        "no product redesign",
+        "no cluttered layout"
+      ],
+      "aspect_ratio": "1:1"
+    },
+    {
+      "id": "H3",
+      "purpose": "Lifestyle - everyday listening at a home desk",
+      "template": "02-lifestyle-scene.json",
+      "template_name": "场景化生活图",
+      "selling_point": "Versatile deep-teal colorway",
+      "angle": "eye-level, product as focal point on rule-of-thirds",
+      "composition": "speaker on a warm wooden desk beside a notebook and small plant, morning window light, shallow depth of field",
+      "scene": "cozy modern desk corner, morning golden light",
+      "allowed_text": [
+        "Your Sound, Everyday"
+      ],
+      "forbidden_claims": [
+        "waterproof claims",
+        "battery claims",
+        "brand collaborations",
+        "competitor products"
+      ],
+      "negative_constraints": [
+        "no faces dominating the frame",
+        "no cluttered desk props",
+        "no color shift",
+        "no logo alteration",
+        "no text beyond one short headline"
+      ],
+      "aspect_ratio": "1:1"
+    },
+    {
+      "id": "H4",
+      "purpose": "Differentiation - one compact design from every angle",
+      "template": "19-multi-angle-grid.json",
+      "template_name": "产品多角度网格",
+      "selling_point": "Woven fabric-mesh exterior with bold JBL logo",
+      "angle": "2x2 grid: front 3/4, side profile, top-down buttons, loop corner close-up",
+      "composition": "four equal cells on clean white, thin white separators, uniform lighting, small label under each cell",
+      "scene": "clean white studio per cell #FFFFFF",
+      "allowed_text": [
+        "Every Angle, Considered",
+        "Front",
+        "Side",
+        "Top",
+        "Loop"
+      ],
+      "forbidden_claims": [
+        "port or accessory claims for unseen sides",
+        "fabricated back-panel details",
+        "battery or waterproof claims"
+      ],
+      "negative_constraints": [
+        "no invented ports or buttons",
+        "no different colorway per cell",
+        "no shadow direction mismatch between cells",
+        "no text beyond short labels"
+      ],
+      "aspect_ratio": "1:1"
+    },
+    {
+      "id": "H5",
+      "purpose": "Detail - weave texture and carry-loop craft close-up",
+      "template": "04-detail-macro.json",
+      "template_name": "细节微距图",
+      "selling_point": "Integrated woven carry loop",
+      "angle": "macro close-up on the top corner with the loop in frame",
+      "composition": "weave texture filling about 70% of the frame, loop entering from the top-right, soft directional light raking across the fabric",
+      "scene": "neutral #F7F7F5 backdrop, texture-first",
+      "allowed_text": [
+        "Look Closer",
+        "Fabric-mesh weave",
+        "Woven carry loop"
+      ],
+      "forbidden_claims": [
+        "material certification claims",
+        "durability or drop-resistance claims",
+        "waterproof claims"
+      ],
+      "negative_constraints": [
+        "no invented stitching or hardware details",
+        "no blur that hides the weave",
+        "no color shift",
+        "no logo alteration"
+      ],
+      "aspect_ratio": "1:1"
+    }
+  ],
+  "assumptions": [
+    "Product type assumed to be a portable speaker based on JBL branding, acoustic-mesh front and playback controls; connectivity protocol remains unknown",
+    "Compact palm-scale inferred from the reference photo context (keyboard and desk items give scale)",
+    "Top buttons assumed to control playback and volume based on visible icons",
+    "Deep teal color name is a visual approximation; official colorway name unknown",
+    "Exact dimensions, weight and all performance figures unknown; no spec text may appear on any image"
+  ]
+}

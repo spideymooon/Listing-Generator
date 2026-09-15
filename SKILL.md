@@ -11,25 +11,116 @@ description: AI Amazon Listing visual agent for analyzing product images, planni
 
 > 根据产品、卖点和 Amazon Listing 转化目标，自动规划整套商品视觉素材，并从电商视觉模板库中选择最合适的模板，生成统一风格的图片 Prompt，并在用户明确要求后批量生成图片。
 
+## 0.1 Project Structure
+
+本 Skill 按独立项目结构运行，不依赖 Claude Code 专用目录。
+
+推荐目录：
+
+```text
+Listing Generator/
+├── SKILL.md
+├── scripts/
+│   ├── listing_plan.py
+│   └── generate_image.py
+├── references/
+│   └── templates/
+│       ├── 01-hero-image.json
+│       ├── 02-lifestyle-scene.json
+│       └── ... 25 个模板
+├── data/
+└── generated-images/
+```
+
+路径约定：
+
+- Skill 文件：`SKILL.md`
+- Python 脚本：`scripts/`
+- 视觉模板：`references/templates/`
+- 产品图片：`data/`
+- 最终图片：`generated-images/`
+
+执行 Python 脚本时，默认以项目根目录 `Listing Generator/` 作为工作目录。
+
 ## 1. 核心工作流
 
 完整工作流：
 
 User Input
 → Product Analysis
+→ Evidence / Claim Gate
 → Selling Point Extraction
 → Conversion Driver Diagnosis
 → Amazon Listing Image Planning
 → Template Selection
 → Campaign Style Lock
+→ Structured Listing Plan
 → Prompt Generation
-→ QA Validation
+→ Prompt QA
 → User Confirmation
 → Image Generation
 → Image QA
+→ Prompt Repair / Retry
 → Final Output
 
-必须按照这个顺序执行。不要跳过产品分析直接随机生成图片。
+必须按照这个顺序执行。
+
+不要跳过产品分析直接随机生成图片。
+不要在没有 Evidence Gate 的情况下把推断信息写成产品事实。
+不要在没有 Structured Listing Plan 的情况下直接批量生成整套图片。
+
+## 1.1 Structured Listing Plan
+
+在完成 Product Analysis、Evidence / Claim Gate、Selling Point Extraction、
+Conversion Driver Diagnosis、Template Selection 和 Campaign Style Lock 后，
+必须形成结构化 Listing Plan，作为后续 Prompt Generation、
+Image Generation 和 Image QA 的核心中间状态。
+
+Structured Listing Plan 至少包含：
+
+- Product Evidence
+  - confirmed
+  - inferred
+  - unknown
+- Core Selling Points
+  - feature
+  - customer benefit
+  - visual proof
+  - evidence level
+- Conversion Driver
+  - primary
+  - secondary
+- Campaign Style Lock
+  - visual direction
+  - color palette
+  - temperature
+  - typography
+  - background
+  - lighting
+  - layout
+  - product presentation
+  - whitespace
+  - forbidden drift
+- Listing Image Plan
+  - image ID
+  - Amazon image purpose
+  - Template ID
+  - template name
+  - selling point
+  - composition
+  - camera angle
+  - scene
+  - allowed text
+  - forbidden claims
+  - negative constraints
+
+每张图片必须明确对应一个 Template ID。
+
+如果某项信息无法确认，必须标记为 `Unknown`，
+不得自行补充产品参数、功能、认证、兼容性或性能。
+
+Structured Listing Plan 是后续生成 Prompt 和执行图片 QA 时的事实基准。
+后续步骤不得无依据地改变已经确认的产品事实、Template ID 或 Campaign Style Lock。
 
 ## 2. 两种工作模式
 
@@ -649,9 +740,68 @@ UGC / 社媒图可以使用：
 
 不要过度磨皮，不要制造明显 AI 感。
 
+## 33.5 Listing Plan Python Integration
+
+当完成 Product Analysis、Evidence / Claim Gate、Selling Point Extraction、
+Conversion Driver Diagnosis、Template Selection 和 Campaign Style Lock 后，
+Agent 必须生成机器可读的草稿：
+
+`scripts/listing_plan_draft.json`
+
+然后调用：
+
+```bash
+python scripts/listing_plan.py scripts/listing_plan_draft.json -o scripts/listing_plan.json
+```
+
+Windows 环境可以使用：
+
+```bash
+py scripts/listing_plan.py scripts/listing_plan_draft.json -o scripts/listing_plan.json
+```
+
+执行规则：
+
+1. `listing_plan_draft.json` 是 AI 的原始规划结果。
+2. `listing_plan.py` 负责结构化、模板存在性检查、Evidence/Claim 风险检查和基本 Schema 校验。
+3. 校验成功后产生 `scripts/listing_plan.json`。
+4. 后续 Prompt Generation 必须优先读取 `scripts/listing_plan.json`。
+5. 不允许绕过 `listing_plan.py`，直接把未经校验的 draft 交给批量生图流程。
+6. 如果出现 Error，禁止继续生成图片；先修复 draft，再重新运行。
+7. 如果出现 Warning，必须检查 Warning，并在必要时修正 draft。
+8. Python 脚本不负责图片理解；产品分析和视觉判断仍由多模态 Agent 完成。
+
+标准数据流：
+
+```text
+Product Image
+    ↓
+AI Product Analysis
+    ↓
+Selling Points
+    ↓
+Template Selection
+    ↓
+Campaign Style Lock
+    ↓
+scripts/listing_plan_draft.json
+    ↓
+scripts/listing_plan.py
+    ↓
+scripts/listing_plan.json
+    ↓
+Prompt Builder
+    ↓
+Image Generator
+    ↓
+Image QA
+```
+
 ## 34. Listing Plan JSON
 
-内部规划优先使用：
+内部规划优先使用结构化 Listing Plan。
+
+推荐结构：
 
 {
   "product": {
@@ -665,23 +815,130 @@ UGC / 社媒图可以使用：
     {
       "feature": "",
       "benefit": "",
-      "visual_proof": ""
+      "visual_proof": "",
+      "evidence_level": "confirmed"
     }
   ],
-  "conversion_driver": "",
-  "campaign_style": {},
+  "conversion_driver": {
+    "primary": "",
+    "secondary": []
+  },
+  "campaign_style": {
+    "visual_direction": "",
+    "color_palette": [],
+    "temperature": "",
+    "typography": "",
+    "background": "",
+    "lighting": "",
+    "layout": "",
+    "product_presentation": "",
+    "whitespace": "",
+    "forbidden_drift": []
+  },
   "images": [
     {
       "id": "H1",
       "purpose": "",
       "selling_point": "",
       "template": "01-hero-image.json",
+      "template_name": "",
       "angle": "",
       "composition": "",
+      "scene": "",
+      "allowed_text": [],
+      "forbidden_claims": [],
+      "negative_constraints": [],
       "aspect_ratio": "1:1"
     }
   ]
 }
+
+规则：
+
+1. `confirmed_features` 只能包含用户明确提供或图片直接可确认的信息。
+2. `inferred_features` 只能用于内部推断、受众分析或情绪/风格判断。
+3. `unknown_features` 必须保持 Unknown，不能为了补全 Listing 而猜测。
+4. `selling_points` 中的功能性 Feature 必须有 evidence_level 支撑。
+5. Inferred / Unknown 信息不得作为产品功能、性能、材质、参数、认证、
+   兼容性或安全属性出现在图片文字中。
+6. 后续 Prompt 不得新增 Structured Listing Plan 中不存在的产品事实。
+
+## 34.1 Evidence / Claim Gate
+
+所有准备进入 Listing 文案、图片文字或视觉功能表达的信息，
+必须经过 Evidence Gate。
+
+### Visual Confirmed
+
+可以直接从产品图片观察到：
+
+- 颜色
+- 外观
+- 形状
+- 可见图案
+- 可见结构
+- 可见按钮/接口
+- 可见配件
+- 可见表面纹理
+
+可以作为视觉事实使用。
+
+### Source Confirmed
+
+用户或产品资料明确提供：
+
+- 材质
+- 尺寸
+- 型号
+- 兼容性
+- 功能
+- 性能
+- 认证
+- 包装内容
+- 防护等级
+
+可以作为产品事实使用。
+
+### Inferred
+
+AI 根据图片、产品类别或常见市场认知推断的信息，例如：
+
+- 可能的目标人群
+- 可能的使用场景
+- 可能的材质
+- 可能的消费动机
+
+只能用于内部分析、视觉氛围和情绪表达。
+
+禁止将 Inferred 直接升级为产品功能事实。
+
+### Unknown
+
+无法从图片或资料确认的信息必须保持 Unknown。
+
+禁止为了让 Listing 看起来“更完整”而补全。
+
+### 高风险 Claims
+
+以下信息默认视为高风险，除非有明确证据：
+
+- TPU / Silicone / Leather / Stainless Steel 等具体材质
+- Shockproof / Drop Protection
+- Waterproof / IP Rating
+- Scratch Resistant
+- Reinforced Corners
+- Camera Protection
+- Military Grade
+- MagSafe
+- Fast Charging
+- Battery Capacity
+- Compatibility
+- 尺寸、重量、厚度
+- 任何认证
+- 医疗或健康功效
+
+没有证据时必须删除或改成纯视觉描述。
+
 
 ## 35. 不同品类的模板偏好
 
@@ -706,6 +963,34 @@ UGC / 社媒图可以使用：
 01 Hero、02 Lifestyle、08 Model、11 Infographic、21 Seasonal、25 Sports Campaign
 
 这些只是推荐，不是固定规则。
+
+## 36.0 Image Provider Detection
+
+开始 Generate Mode 前，必须检查当前环境是否存在可用的图片生成能力。
+
+Provider 优先级：
+
+1. 当前 Agent / Codex 可直接使用的图片生成能力
+2. 项目中已经配置的 Image Provider
+3. OpenAI-compatible Image API
+4. 其他明确配置且可访问的 Image Provider
+
+如果存在可用 Provider：
+
+- 使用当前可用 Provider。
+- 不得无故切换 Provider。
+- 必须保持产品参考图、Prompt 和 Campaign Style Lock 一致。
+
+如果不存在可用 Provider：
+
+- 不得假设存在图片生成能力。
+- 不得声称图片已经生成。
+- 不得虚构生成结果或输出路径。
+- 可以继续完成完整 Listing Plan 和最终 Image Prompt。
+- 明确告诉用户当前环境缺少可用的图片生成能力。
+
+禁止因为缺少 `.env` 或 API Key 而擅自假设某个未配置 Provider 一定可用。
+禁止要求用户直接在聊天中发送 API Key。
 
 ## 36. Image Generation 配置
 
@@ -796,13 +1081,24 @@ Amazon Listing：
 
 用户确认后：
 
-1. 读取最终 Listing Plan。
-2. 读取对应模板。
-3. 生成每张图片 Prompt。
-4. 执行 QA。
-5. 调用图片生成脚本。
-6. 保存图片。
-7. 返回结果。
+1. 读取最终 Structured Listing Plan。
+2. 读取对应 Template JSON。
+3. 检查 Image Provider 是否可用。
+4. 为每张图片生成最终 Image Prompt。
+5. 执行 Image Prompt QA。
+6. 调用图片生成能力。
+7. 保存图片和对应 metadata。
+8. 对生成结果执行 Image QA。
+9. PASS → 完成。
+10. FAIL → 进入 Prompt Repair / Retry Policy。
+11. 达到重试上限仍失败 → 停止自动循环并请求人工确认。
+
+不得在生成过程中无依据地修改：
+- Product Identity
+- Evidence Gate
+- Template ID
+- Amazon Image Purpose
+- Campaign Style Lock
 
 ## 42. Image Prompt QA
 
@@ -810,7 +1106,8 @@ Amazon Listing：
 
 - Product clearly defined
 - Image purpose defined
-- Correct template
+- Correct Template ID
+- Correct template structure
 - Correct composition
 - Camera angle defined
 - Product scale defined
@@ -818,8 +1115,12 @@ Amazon Listing：
 - Color hex values used where needed
 - Negative space defined
 - Negative constraints included
+- Allowed text explicitly defined
+- Forbidden claims explicitly defined
 - Platform context defined
 - Product consistency maintained
+- Evidence Gate respected
+- Campaign Style Lock respected
 
 ## 43. Multi-image QA
 
@@ -828,15 +1129,87 @@ Amazon Listing：
 - Same Campaign Style Lock
 - Same product appearance
 - Same product color
-- Same material
-- Same typography
+- Same product graphics / artwork
+- Same material appearance when confirmed
+- Same typography system
 - Same lighting system
 - Same color system
 - Different camera angles
-- No 3 consecutive identical angles
+- No 3 consecutive identical angles unless intentionally required
 - Hero image remains simple
 - Detail images contain ecommerce information
 - No fabricated claims
+- No unsupported specifications
+- No unexplained style drift
+
+## 43.1 QA Severity
+
+Image QA 分为 Hard Fail 和 Soft Fail。
+
+### Hard Fail
+
+出现以下任意问题，必须重新生成：
+
+- 产品结构发生变化
+- 产品颜色发生变化
+- 产品核心图案发生变化
+- 产品关键视觉元素发生变化
+- 出现错误或乱码文字
+- 出现未经确认的产品功能
+- 出现未经确认的产品参数
+- 出现未经确认的材质声明
+- 出现未经确认的认证或兼容性声明
+- Amazon 主图出现文字
+- Amazon 主图出现 Logo 或其他非产品元素
+- Template 核心布局严重偏离
+- Campaign Style Lock 明显失效
+
+Hard Fail → Prompt Repair → 重新生成。
+
+### Soft Fail
+
+以下问题可以记录，但默认不强制重新生成：
+
+- 留白比例轻微偏差
+- 构图轻微偏差
+- 场景自然度一般
+- 视觉层级一般
+- 装饰元素轻微偏差
+- 非关键细节略有变化
+
+Soft Fail → 可以接受；只有用户要求进一步优化时才重新生成。
+
+## 43.2 Retry Policy
+
+默认：
+
+`MAX_RETRY = 3`
+
+执行逻辑：
+
+Generate
+→ Image QA
+→ PASS → 完成
+
+Generate
+→ Image QA
+→ HARD FAIL
+→ Prompt Repair
+→ Generate
+
+最多自动重试 3 次。
+
+如果连续 3 次仍然 FAIL：
+
+- 停止自动生成循环；
+- 输出失败图片；
+- 输出具体 QA 失败项；
+- 输出失败原因；
+- 输出建议修改方向；
+- 等待用户决定是否继续。
+
+不得无限循环生成。
+
 
 ## 44. Product Consistency QA
 
@@ -881,6 +1254,7 @@ Amazon Listing：
 
 如果图片生成失败，先检查：
 
+- Image Provider availability
 - API configuration
 - model name
 - image path
@@ -892,26 +1266,42 @@ Amazon Listing：
 如果是 Prompt 问题，只修改导致失败的部分。
 
 保持：
+- Evidence Gate
 - Campaign Style Lock
 - Product identity
+- Template ID
 - Listing purpose
 
 不变。
 
-## 47. API 配置缺失
+如果属于 Hard Fail：
+→ 必须进入 Retry Policy。
 
-如果缺少图片 API：
+如果属于 Soft Fail：
+→ 默认记录并继续。
 
-不要调用生图脚本。
+## 47. API / Provider 配置缺失
+
+如果当前环境没有可用图片 Provider：
+
+不要调用不存在或未配置的生图脚本。
 
 仍然完成：
 
 - Product Analysis
+- Evidence / Claim Gate
 - Selling Points
+- Conversion Driver
 - Listing Plan
 - Template Selection
 - Campaign Style Lock
 - Final Prompts
+
+必须明确告诉用户：
+“当前环境没有可用的图片生成 Provider，因此暂时只能完成规划和 Prompt。”
+
+不得声称已经生成图片。
+
 
 ## 48. User Confirmation
 
@@ -1004,6 +1394,22 @@ Agent 必须理解：
 → 批量生成
 
 ## 55. 输出格式：Planning Mode
+
+Planning Mode 必须按以下顺序输出：
+
+1. Product Analysis
+2. Evidence / Claim Gate
+3. Core Selling Points
+4. Conversion Driver
+5. Image Plan + Template Selection
+6. Campaign Style Lock
+7. Structured Listing Plan
+8. Assumptions / Unknowns
+9. Final Prompts（如果用户要求 Prompt）
+
+如果用户只要求“规划”且未要求 Prompt，可以在 Structured Listing Plan 后停止，
+不要提前生成图片。
+
 
 # Amazon Listing Plan
 
@@ -1115,6 +1521,25 @@ Negative Constraints:
 如果没有图片生成 API：仍然完成完整 Listing Plan 和 Prompt。
 
 如果用户没有要求生成：不要自动调用图片生成 API。
+
+## 58.1 Final Safety and Consistency Gate
+
+在输出最终结果前，必须再次检查：
+
+- 所有产品事实都有证据等级。
+- Inferred / Unknown 没有被升级成产品功能。
+- 所有图片都有明确 Template ID。
+- H1-H5 的 Amazon Purpose 与模板匹配。
+- Campaign Style Lock 在整套图片中保持一致。
+- 主图不含文字、促销信息或无关装饰。
+- 图片文字没有拼写错误、重复或颜色代码泄露。
+- 没有未经确认的参数、材质、认证、兼容性或性能声明。
+- Image QA 的 Hard Fail 已经修复。
+- 自动重试没有超过 `MAX_RETRY = 3`。
+- 如果没有可用 Image Provider，不得虚构生成结果。
+
+Agent 的目标不是“尽可能生成更多内容”，
+而是“在证据约束下生成可信、统一、可执行的 Amazon Listing 视觉方案”。
 
 ## 59. Agent Identity
 

@@ -1,0 +1,175 @@
+You are an Amazon Listing Visual Strategist and Image Prompt Engineer.
+Create Amazon Listing image H2.
+
+IMAGE ROLE: Core Benefit / Feature
+- Amazon role objective: Communicate one evidence-supported core benefit
+- Role-specific rules:
+  - Communicate one primary supported selling point only.
+  - Use visual proof or a clear feature-to-benefit relationship.
+  - Keep the product as the visual anchor.
+  - If the planner-selected selling point is not confirmed, replace it with a confirmed visual feature or remove factual claim language.
+  - Text must be concise and evidence-supported.
+  - Do not stack unrelated benefits.
+  - Callout budget: 1 primary benefit; supporting visual evidence may be shown without becoming separate benefit claims.
+
+IMAGE-SPECIFIC DIRECTION:
+- Amazon purpose: Core benefit - compact music that travels with you
+- Primary selling point: none confirmed; prioritize visible/confirmed product attributes instead of inventing a claim.
+- Camera/view angle: front 3/4 product view with callout lines
+- Composition direction: product on the left third, three feature callout blocks on the right with thin-line icons, feature-grid variant, clear hierarchy
+- Product reference: Use the supplied product reference image as the primary identity source.
+
+PRODUCT IDENTITY — DO NOT REDESIGN:
+- Product: JBL Ultra-Compact Portable Speaker
+- Category: Consumer Electronics / Portable Audio
+- Confirmed visual/product facts:
+  - deep teal woven fabric-mesh exterior across the body
+  - grey JBL logo with orange outline on the front face
+  - matte top panel with three raised icon buttons: volume-down, play/pause, volume-up
+  - woven fabric carry loop fixed at the top corner
+  - compact rounded rectangular body with soft edges
+  - dark teal colorway with tonal rubberized-look top trim
+
+PRODUCT CONSISTENCY:
+- Preserve exact identity from the supplied product reference.
+- Preserve shape, proportions, geometry, structure, visible controls, materials, colors, logo placement and visible details.
+- Do not redesign, recolor, rebrand, simplify or add product features.
+- Do not use inferred information as a factual specification.
+- If generated text conflicts with the product reference, remove the unsupported claim.
+
+EVIDENCE COMPILER — HARD CLAIM GATE:
+Only confirmed evidence may become factual product copy.
+
+CONFIRMED PRODUCT FACTS — ALLOWED:
+- deep teal woven fabric-mesh exterior across the body
+- grey JBL logo with orange outline on the front face
+- matte top panel with three raised icon buttons: volume-down, play/pause, volume-up
+- woven fabric carry loop fixed at the top corner
+- compact rounded rectangular body with soft edges
+- dark teal colorway with tonal rubberized-look top trim
+
+INFERRED PRODUCT FACTS — VISUAL GUIDANCE ONLY:
+- portable speaker product type, inferred from JBL branding, acoustic-mesh front and playback controls
+- likely Bluetooth connectivity, standard for this product type and visible control layout (unconfirmed)
+- compact palm-scale portability, inferred from the reference photo context (keyboard and desk items provide scale)
+- target users: young consumers who listen at desks, in dorms and on casual outings
+
+UNKNOWN PRODUCT FACTS — DO NOT CLAIM:
+- wireless protocol and version
+- waterproof or splash resistance rating
+- battery capacity and playtime
+- output power and driver specifications
+- ports and buttons beyond the visible top panel
+- included accessories and packaging
+- exact dimensions and weight
+- official colorway name
+- companion app or pairing features
+
+SELLING POINTS — CONFIRMED AND USABLE:
+- None.
+
+SELLING POINTS — BLOCKED FROM FACTUAL COPY:
+- Drops into any bag or palm, so music goes wherever the day goes [contains inferred benefit/marketing language]
+- Textile weave and brand styling bring a premium look to any desk or shelf [contains inferred benefit/marketing language]
+- Change tracks and adjust volume without reaching for a phone [contains inferred benefit/marketing language]
+- Hook or clip the speaker to a bag or belt for hands-free carrying [contains inferred benefit/marketing language]
+- A calm modern accent that fits desk, home and outdoor scenes [contains inferred benefit/marketing language]
+
+ENFORCEMENT:
+- Never convert inferred information into a product specification.
+- Never convert unknown information into a product claim.
+- Never invent numbers, certifications, compatibility, performance, reviews, rankings, awards, accessories or safety claims.
+- If the selected selling point is blocked, do not repeat it as factual marketing copy.
+
+VISUAL EVIDENCE — CONFIRMED AND USABLE:
+- deep teal woven fabric-mesh exterior across the body
+- grey JBL logo with orange outline on the front face
+- matte top panel with three raised icon buttons: volume-down, play/pause, volume-up
+- woven fabric carry loop fixed at the top corner
+- compact rounded rectangular body with soft edges
+- dark teal colorway with tonal rubberized-look top trim
+- These are confirmed visible/product attributes, not independent performance claims.
+- They may guide composition, close-ups, labels, arrows, icons or visual proof.
+- Do not rewrite them into unsupported benefits, specifications or capabilities.
+
+SELLING POINT COMPILER — SEMANTICALLY FILTERED:
+- Planner-selected selling point BLOCKED: Ultra-compact grab-and-go body
+- Reason: planner text is not sufficient evidence for a factual claim.
+- Use visible confirmed product attributes instead of repeating the blocked marketing statement.
+- No selling point survived the semantic claim filter.
+- Blocked selling points:
+  - Drops into any bag or palm, so music goes wherever the day goes [contains inferred benefit/marketing language]
+  - Textile weave and brand styling bring a premium look to any desk or shelf [contains inferred benefit/marketing language]
+  - Change tracks and adjust volume without reaching for a phone [contains inferred benefit/marketing language]
+  - Hook or clip the speaker to a bag or belt for hands-free carrying [contains inferred benefit/marketing language]
+  - A calm modern accent that fits desk, home and outdoor scenes [contains inferred benefit/marketing language]
+
+CONVERSION DRIVER:
+- Primary: Visual-driven
+- Secondary: Emotional-value-driven
+- Reason: Compact form, textile texture and bold logo make visual appeal the first hook; music-anywhere moments add emotional pull. No performance claims may be used, so pain-point proof is limited.
+- Conversion intent must never override the Evidence Compiler.
+
+CAMPAIGN STYLE LOCK — CONSISTENT ACROSS THE LISTING SET:
+- Color palette: #FFFFFF; #F7F7F5; #2D2D2D; #777777; #2F5D63; #F05A28
+- Typography: Modern geometric sans-serif; bold condensed uppercase headlines, light captions
+- Background: Pure white #FFFFFF studio for hero and grid; #F7F7F5 panels for infographic and macro; warm wood-desk and soft outdoor environments for lifestyle
+- Lighting: Soft directional studio lighting from upper left with controlled gentle shadows, consistent across the set; natural window light in lifestyle scenes
+- Icon style: Minimal thin-line icons with uniform 2px stroke in deep teal #2F5D63 on light panels
+- Product presentation: Same speaker in every image: deep teal woven body, grey JBL logo with orange outline, matte top panel with three icon buttons, woven loop at the top corner; never redesign, recolor or rebrand
+- Whitespace: 40-50% negative space; hero and grid images lean minimal
+
+TEMPLATE COMPILER — SELECTED VISUAL TEMPLATE:
+- Template ID: infographic
+- Template file: 11-infographic.json
+- Template name: 信息图/A+Content
+- The following rules are template-specific and must be followed:
+- Layout:
+  - layout: structured sections with clear hierarchy
+  - default layout: clean grid, product as focal point
+- Required visual elements:
+  - subject: {product_description}
+  - features: {feature_list}
+  - default features: 4-6 key features with icons and descriptions
+- Text / typography:
+  - data_vis: {data_elements}
+- Camera / viewpoint:
+  - type: e-commerce product infographic
+- Style:
+  - color_scheme: {brand_colors}
+  - quality: professional e-commerce design, mobile-friendly
+  - default color_scheme: brand-consistent palette
+
+AMAZON VISUAL QUALITY GATE:
+- Product must be immediately recognizable.
+- Visual hierarchy must communicate the intended purpose quickly.
+- Keep composition commercially credible and easy to scan.
+- Avoid clutter and unnecessary decorative elements.
+- Avoid generic AI-looking hands, reflections, textures, props and environments.
+- Product edges, logos, controls, seams and materials must remain coherent.
+
+UNIVERSAL NEGATIVE CONSTRAINTS:
+- No invented product features.
+- No unsupported specifications, certifications or ratings.
+- No fake reviews, stars, awards, rankings, badges or sales numbers.
+- No competitor logos or fabricated competitor comparisons.
+- No distorted product geometry.
+- No extra product variants unless explicitly required.
+- No product recoloring or logo redesign.
+- No inconsistent campaign style.
+- No malformed, garbled or unreadable text.
+
+H2 HARD CONSTRAINTS:
+- One primary supported benefit only.
+- Every callout must map to a confirmed visual/product fact.
+- Remove any unsupported numeric or performance statement.
+
+FINAL PRE-GENERATION CHECK:
+1. Product identity matches the supplied reference.
+2. Selected template rules are actually followed.
+3. Image role and Amazon purpose are clear.
+4. Every factual claim is confirmed.
+5. Inferred information has not become a hard claim.
+6. Unknown information is not presented as fact.
+7. Campaign Style Lock is preserved.
+8. No prohibited or fabricated claims are present.
