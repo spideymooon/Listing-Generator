@@ -28,9 +28,9 @@ Design goals
 
 Environment
 -----------
-IMG_BASE_URL=https://api.openai.com/v1
-IMG_MODEL=gpt-image-1.5
-IMG_API_KEY=your_key
+IMG_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
+IMG_MODEL=qwen-image-3.0-pro
+IMG_API_KEY=sk-ws-H.PHEIRPX.s77f.MEYCIQDsi0XzZF8Hs9nOf6_H8Q-uNZEjPAdUyuJ6kvZ6kM37xAIhAJIK4lElp9sw6ygUH2Ii3Pxg8xNcbGdEQZ4LcuePLt2Z
 
 Optional:
 IMG_SIZE=1536x1024
@@ -68,12 +68,14 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 
-VERSION = "2.6.1"
+VERSION = "2.7.0"
 
 ROLE_ORDER = ["H1", "H2", "H3", "H4", "H5"]
 
 DEFAULT_BASE_URL = "https://api.openai.com/v1"
-DEFAULT_MODEL = "gpt-image-1.5"
+DEFAULT_MODEL = "gpt-image-2"
+GLM_BASE_URL = "https://open.bigmodel.cn/api/paas/v4"
+GLM_DEFAULT_MODEL = "glm-image"
 DEFAULT_SIZE = "1536x1024"
 DEFAULT_QUALITY = "high"
 DEFAULT_OUTPUT_FORMAT = "png"
@@ -208,9 +210,36 @@ def resolve_output_dir(plan_path: Path, explicit: Optional[str]) -> Path:
 
 
 def get_provider_config() -> ProviderConfig:
-    api_key = env_first("IMG_API_KEY", "OPENAI_API_KEY")
+    api_key = env_first(
+        "IMG_API_KEY", "OPENAI_API_KEY", "QWEN_API_KEY",
+        "DASHSCOPE_API_KEY", "GEMINI_API_KEY", "ZAI_API_KEY"
+    )
     base_url = env_first("IMG_BASE_URL", "OPENAI_BASE_URL", default=DEFAULT_BASE_URL)
-    model = env_first("IMG_MODEL", "OPENAI_IMAGE_MODEL", default=DEFAULT_MODEL)
+
+    # Qwen workspace keys (sk-ws-...) are best paired with the workspace-specific
+    # regional endpoint. If a workspace ID is provided and the shared DashScope
+    # URL is still in use, build the dedicated Beijing/Singapore endpoint.
+    qwen_workspace = os.getenv("QWEN_WORKSPACE_ID", "").strip()
+    qwen_region = os.getenv("QWEN_REGION", "cn-beijing").strip()
+    if qwen_workspace and "dashscope.aliyuncs.com/compatible-mode/v1" in base_url.lower():
+        if qwen_region == "cn-beijing":
+            base_url = f"https://{qwen_workspace}.cn-beijing.maas.aliyuncs.com/compatible-mode/v1"
+        elif qwen_region == "ap-southeast-1":
+            base_url = f"https://{qwen_workspace}.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1"
+
+    base_url_lower = base_url.lower()
+    if "bigmodel.cn" in base_url_lower:
+        default_model = GLM_DEFAULT_MODEL
+    elif "googleapis.com" in base_url_lower:
+        default_model = "gemini-3.1-flash-image"
+    elif "dashscope.aliyuncs.com" in base_url_lower or "maas.aliyuncs.com" in base_url_lower or "qianwen" in base_url_lower:
+        default_model = "qwen-image-3.0-pro"
+    else:
+        default_model = DEFAULT_MODEL
+    model = env_first(
+        "IMG_MODEL", "OPENAI_IMAGE_MODEL", "QWEN_IMAGE_MODEL",
+        "GEMINI_IMAGE_MODEL", "ZAI_IMAGE_MODEL", default=default_model
+    )
 
     try:
         timeout = int(os.getenv("IMG_TIMEOUT", str(DEFAULT_TIMEOUT)))
@@ -237,12 +266,16 @@ def get_provider_config() -> ProviderConfig:
 def detect_provider(base_url: str) -> str:
     host = re.sub(r"^https?://", "", base_url).split("/")[0].lower()
 
+    if "bigmodel.cn" in host:
+        return "glm-image"
     if "openai.com" in host:
         return "openai"
     if "volces.com" in host or "doubao" in host:
         return "doubao-compatible"
     if "googleapis.com" in host:
         return "google-compatible"
+    if "dashscope.aliyuncs.com" in host or "maas.aliyuncs.com" in host or "qianwen" in host:
+        return "qwen"
     return "openai-compatible"
 
 
@@ -250,6 +283,11 @@ def normalize_image_endpoint(base_url: str) -> str:
     if base_url.endswith("/images/generations"):
         return base_url
     return f"{base_url}/images/generations"
+
+
+def is_glm_provider(config: ProviderConfig) -> bool:
+    return detect_provider(config.base_url) == "glm-image" or config.model == "glm-image"
+
 
 
 def encode_image_file(path: Path) -> str:
@@ -429,7 +467,7 @@ def get_provider_adapter(config: ProviderConfig) -> ImageProviderAdapter:
 
     # Explicit adapter boundary for future provider implementations.
     # For now, all unknown providers use the compatible JSON adapter.
-    if provider in {"openai", "openai-compatible", "doubao-compatible", "google-compatible"}:
+    if provider in {"openai", "openai-compatible", "doubao-compatible", "google-compatible", "qwen", "glm-image"}:
         return ImageProviderAdapter(config)
 
     return ImageProviderAdapter(config)
@@ -440,28 +478,182 @@ def build_request_payload(
     config: ProviderConfig,
     reference_images: List[Path],
 ) -> Dict[str, Any]:
-    """
-    Build an OpenAI-compatible /images/generations request.
+    """Build JSON payload for providers using /images/generations.
 
-    Reference images are passed in the prompt as data URLs only when
-    the provider's generation endpoint accepts them through the input
-    field. Some providers use a different schema; the adapter boundary
-    is intentionally isolated here for future provider-specific support.
+    Qwen Image 3.0 uses the OpenAI-compatible endpoint but adds the `image`
+    extension field for I2I. Other providers use their own adapter paths.
     """
+    provider = detect_provider(config.base_url)
+
     payload: Dict[str, Any] = {
         "model": config.model,
         "prompt": prompt,
         "size": config.size,
-        "quality": config.quality,
         "n": 1,
     }
 
-    # OpenAI-compatible providers that support image references may accept
-    # an input/reference field. We do not force it unless a reference exists.
+    if config.quality and provider not in {"qwen", "glm-image"}:
+        payload["quality"] = config.quality
+
+    if provider == "qwen":
+        if reference_images:
+            if len(reference_images) > 3:
+                raise GenerationError("Qwen Image 3.0 supports up to 3 reference images.")
+            payload["image"] = [encode_image_file(p) for p in reference_images]
+            payload["prompt_extend"] = True
+            payload["watermark"] = False
+        return payload
+
     if reference_images:
-        payload["input_images"] = [encode_image_file(p) for p in reference_images]
+        raise GenerationError(
+            f"Provider '{provider}' needs its native image-edit adapter; "
+            "use the configured OpenAI/Gemini/Qwen adapter or --no-reference."
+        )
 
     return payload
+
+
+def build_openai_multipart(
+    prompt: str,
+    config: ProviderConfig,
+    reference_images: List[Path],
+) -> Tuple[bytes, str]:
+    boundary = "----ListingGeneratorBoundary" + str(int(time.time() * 1000))
+    parts: List[bytes] = []
+
+    def field(name: str, value: str) -> None:
+        parts.append(
+            (f"--{boundary}\r\n"
+             f'Content-Disposition: form-data; name="{name}"\r\n\r\n'
+             f"{value}\r\n").encode("utf-8")
+        )
+
+    field("model", config.model)
+    field("prompt", prompt)
+    if config.size:
+        field("size", config.size)
+    if config.quality:
+        field("quality", config.quality)
+    field("n", "1")
+
+    for image in reference_images:
+        mime = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp"}.get(image.suffix.lower(), "application/octet-stream")
+        parts.append(
+            (f"--{boundary}\r\n"
+             f'Content-Disposition: form-data; name="image"; filename="{image.name}"\r\n'
+             f"Content-Type: {mime}\r\n\r\n").encode("utf-8")
+            + image.read_bytes() + b"\r\n"
+        )
+
+    parts.append(f"--{boundary}--\r\n".encode("utf-8"))
+    return b"".join(parts), f"multipart/form-data; boundary={boundary}"
+
+
+def request_openai_edit(
+    prompt: str,
+    config: ProviderConfig,
+    reference_images: List[Path],
+) -> Dict[str, Any]:
+    if not reference_images:
+        raise GenerationError("OpenAI image edit requires at least one reference image.")
+    url = config.base_url.rstrip("/") + "/images/edits"
+    body, content_type = build_openai_multipart(prompt, config, reference_images)
+    request = urllib.request.Request(
+        url=url, data=body, method="POST",
+        headers={"Authorization": f"Bearer {config.api_key}", "Content-Type": content_type, "Accept": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=config.timeout) as response:
+            raw = response.read().decode("utf-8")
+        return json.loads(raw)
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")
+        raise GenerationError(f"OpenAI image edit HTTP {exc.code}: {detail[:3000]}") from exc
+    except Exception as exc:
+        raise GenerationError(f"OpenAI image edit failed: {exc}") from exc
+
+
+def request_gemini_image(
+    prompt: str,
+    config: ProviderConfig,
+    reference_images: List[Path],
+) -> Dict[str, Any]:
+    """Gemini native Interactions API; supports text + base64 image inputs."""
+    if not reference_images:
+        raise GenerationError("Gemini image generation requires no reference here; use /images/generations for T2I.")
+
+    base = "https://generativelanguage.googleapis.com/v1beta/interactions"
+    inputs: List[Dict[str, Any]] = [{"type": "text", "text": prompt}]
+    for image in reference_images:
+        suffix = image.suffix.lower()
+        mime = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp"}.get(suffix, "application/octet-stream")
+        inputs.append({"type": "image", "data": base64.b64encode(image.read_bytes()).decode("ascii"), "mime_type": mime})
+
+    payload = {
+        "model": config.model,
+        "input": inputs,
+        "response_format": {"type": "image", "aspect_ratio": "16:9"},
+    }
+    body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    request = urllib.request.Request(
+        url=base, data=body, method="POST",
+        headers={"x-goog-api-key": config.api_key, "Content-Type": "application/json", "Accept": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=config.timeout) as response:
+            data = json.loads(response.read().decode("utf-8"))
+        image = data.get("output_image")
+        if isinstance(image, dict) and image.get("data"):
+            return {"data": [{"b64_json": image["data"]}]}
+        for step in data.get("steps", []):
+            for block in step.get("content", []) if isinstance(step, dict) else []:
+                if isinstance(block, dict) and block.get("type") == "image" and block.get("data"):
+                    return {"data": [{"b64_json": block["data"]}]}
+        raise GenerationError("Gemini response contains no generated image data.")
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")
+        raise GenerationError(f"Gemini image edit HTTP {exc.code}: {detail[:3000]}") from exc
+    except GenerationError:
+        raise
+    except Exception as exc:
+        raise GenerationError(f"Gemini image edit failed: {exc}") from exc
+
+
+def request_glm_image_sdk(
+    prompt: str,
+    config: ProviderConfig,
+) -> Dict[str, Any]:
+    """Call GLM-Image through Zhipu's official Python SDK.
+
+    Official SDK: ``pip install zai-sdk``.
+    The hosted GLM-Image API returns an image URL.
+    """
+    try:
+        from zai import ZhipuAiClient
+    except ImportError as exc:
+        raise GenerationError(
+            "GLM-Image requires the official Zhipu SDK. Install it with "
+            "`pip install zai-sdk`."
+        ) from exc
+
+    try:
+        client = ZhipuAiClient(api_key=config.api_key)
+        response = client.images.generations(
+            model=config.model,
+            prompt=prompt,
+            size=config.size,
+        )
+        if not getattr(response, "data", None):
+            raise GenerationError("GLM-Image SDK response contains no data[].")
+        item = response.data[0]
+        url = getattr(item, "url", None)
+        if not url:
+            raise GenerationError("GLM-Image SDK response contains no image URL.")
+        return {"data": [{"url": url}]}
+    except GenerationError:
+        raise
+    except Exception as exc:
+        raise GenerationError(f"GLM-Image SDK request failed: {exc}") from exc
 
 
 def request_json(
@@ -494,7 +686,7 @@ def request_json(
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="replace")
         raise GenerationError(
-            f"Image API HTTP {exc.code}: {detail[:3000]}"
+            f"Image API HTTP {exc.code}: {detail}"
         ) from exc
     except urllib.error.URLError as exc:
         raise GenerationError(
@@ -573,7 +765,14 @@ def generate_one(
 
     for attempt in range(config.max_retries + 1):
         try:
-            response = request_json(endpoint, payload, config)
+            if provider == "glm-image":
+                response = request_glm_image_sdk(prompt, config)
+            elif provider == "openai" and reference_images:
+                response = request_openai_edit(prompt, config, reference_images)
+            elif provider == "google-compatible" and reference_images:
+                response = request_gemini_image(prompt, config, reference_images)
+            else:
+                response = request_json(endpoint, payload, config)
             image_bytes, response_format = decode_generated_image(response)
 
             output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -689,6 +888,13 @@ def print_config(config: ProviderConfig, provider: str) -> None:
     print(f"  size     : {config.size}")
     print(f"  quality  : {config.quality}")
     print(f"  api key  : {'configured' if config.api_key else 'MISSING'}")
+    if provider == "glm-image":
+        print("  sdk      : zai-sdk (official Zhipu Python SDK)")
+        print("  mode     : text-to-image (hosted GLM-Image API)")
+    if provider == "qwen":
+        workspace = os.getenv("QWEN_WORKSPACE_ID", "").strip()
+        if workspace:
+            print(f"  workspace: {workspace}")
 
 
 def main() -> int:
@@ -773,6 +979,10 @@ def main() -> int:
         else:
             print("Reference mode: NONE — generation will rely on prompt only")
         print_config(config, provider)
+
+        if provider == "glm-image" and references and not args.no_reference:
+            print("  note     : GLM-Image hosted API does not document reference-image input.")
+            print("             Use --no-reference for a text-to-image API test.")
 
         if args.dry_run:
             print("\nReference images:")

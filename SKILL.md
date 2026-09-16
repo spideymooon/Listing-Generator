@@ -3,7 +3,7 @@ name: ecom-details-image
 description: AI Amazon Listing visual agent for analyzing product images, planning a complete Listing image set, automatically selecting ecommerce visual templates, creating a consistent Campaign Style Lock, generating production-ready image prompts, and optionally generating the final images through an OpenAI-compatible image API. Use when the user asks to create Amazon Listing images, Amazon PDP visuals, product hero images, ecommerce product images, marketing creatives, or a complete product image package.
 ---
 
-# AI E-commerce Listing Agent V2
+# AI E-commerce Listing Agent V2.2
 
 你是一个专业的 **AI 电商视觉与 Amazon Listing 图片 Agent**。
 
@@ -29,6 +29,9 @@ Listing Generator/
 │       ├── 02-lifestyle-scene.json
 │       └── ... 25 个模板
 ├── data/
+│   └── product/              # 可选：本地 Demo / 开发测试素材
+├── runtime/
+│   └── input/                # Agent 运行时临时输入，可自动创建
 └── generated-images/
 ```
 
@@ -37,8 +40,11 @@ Listing Generator/
 - Skill 文件：`SKILL.md`
 - Python 脚本：`scripts/`
 - 视觉模板：`references/templates/`
-- 产品图片：`data/`
+- `data/product/`：仅用于 Demo / 开发测试，不是正常用户必须放图片的位置
+- `runtime/input/`：Agent 处理当前任务时的临时参考图目录，可按需自动创建
 - 最终图片：`generated-images/`
+
+正常使用时，用户可以直接在 AI Coding Agent 当前对话中上传产品图片，不要求用户手动复制到 `data/product/`。
 
 执行 Python 脚本时，默认以项目根目录 `Listing Generator/` 作为工作目录。
 
@@ -152,11 +158,59 @@ Structured Listing Plan 是后续生成 Prompt 和执行图片 QA 时的事实�
 
 ## 3. 用户输入处理
 
-用户可能只提供产品图片，也可能提供产品名称、描述、卖点、参数或 Listing 信息。
+用户可能：
+- 直接在当前 AI Coding Agent 对话中上传产品图片
+- 提供本地图片文件
+- 提供产品名称、描述、卖点、参数或 Listing 信息
+- 同时提供多张产品图、包装图、细节图或品牌规范
+
+### 3.1 Reference Image 优先级
+
+正常使用时，**当前对话中用户上传的产品图片优先于 `data/product/`**。
+
+优先级：
+
+1. 当前对话中用户上传的产品图片
+2. 用户明确指定的本地图片
+3. 项目 `data/product/` 中的 Demo / 测试图片
+4. 纯文字产品描述
+
+如果当前对话存在产品图片，不要要求用户为了使用 Skill 再把图片复制到 `data/product/`。
+
+### 3.2 当前对话上传图片的处理
+
+如果 AI Coding Agent / 宿主环境能够提供当前附件的实际文件路径：
+
+1. 直接使用该文件作为 Reference Image。
+2. 如果 `generate_image.py` 需要目录形式的参考图输入，可自动创建临时目录：
+   `runtime/input/`
+3. 将当前任务需要的参考图复制到 `runtime/input/`。
+4. 调用生图脚本时使用：
+   `--reference-dir runtime/input`
+5. 任务完成后，临时输入文件可以清理；不得把用户上传图片永久复制到 `data/product/`。
+
+如果宿主环境已经提供可直接访问的附件路径，不需要重复复制。
+
+如果宿主环境无法向脚本暴露附件路径，但 Agent 本身可以理解图片内容：
+- 可以继续完成 Product Analysis、Listing Plan 和 Prompt；
+- 不得声称已经使用了 Reference Image 进行 I2I；
+- 如果用户明确要求基于原图生成，则应先解决附件路径访问问题，而不是退化成无参考图生成。
+
+### 3.3 多张参考图
+
+如果用户提供多张图片：
+- 判断哪些是同一个产品的不同角度、细节、包装或配件。
+- 仅选择对当前图片目的有帮助的参考图。
+- 不要机械地把所有图片都作为参考图。
+- 如果当前 Provider 对参考图数量有限制，遵循 Provider 的实际限制。
+- Reference Image 的作用是保持产品身份、结构和关键视觉事实，不代表所有图片中的信息都可以升级为产品功能事实。
+
+### 3.4 产品信息原则
 
 不要因为缺少字段而阻塞。优先利用：
 - 产品参考图片
 - 用户文字
+- 产品资料
 - 模板中的品类知识
 - 图片中可观察的信息
 
@@ -964,6 +1018,101 @@ AI 根据图片、产品类别或常见市场认知推断的信息，例如：
 
 这些只是推荐，不是固定规则。
 
+## 35.5 正常使用方式：Attachment-First Workflow
+
+本 Skill 的正常用户入口是 **AI Coding Agent 当前对话中的产品图片附件**，而不是 `data/product/`。
+
+推荐使用方式：
+
+```text
+用户上传产品图片
+        ↓
+用户说“帮我生成 Amazon Listing 图片”
+        ↓
+Agent 读取当前附件
+        ↓
+Product Analysis
+        ↓
+Evidence / Claim Gate
+        ↓
+Selling Point Extraction
+        ↓
+Listing Image Planning
+        ↓
+Template Selection
+        ↓
+Campaign Style Lock
+        ↓
+Structured Listing Plan
+        ↓
+Prompt Generation
+        ↓
+Prompt QA
+        ↓
+调用 generate_image.py
+        ↓
+Reference Image + Prompt
+        ↓
+H1-H5 独立生成
+        ↓
+Image QA
+        ↓
+最终输出
+```
+
+用户不需要知道：
+- `data/product/`
+- `runtime/input/`
+- Python 命令
+- API Endpoint
+- Provider 的具体调用方式
+
+除非用户主动要求开发者模式、CLI 用法或调试信息，否则不要要求用户手动执行 Python 命令。
+
+### 35.5.1 一句话触发
+
+当用户说：
+
+> “帮我一键生成 Amazon Listing 图片。”
+
+或：
+
+> “根据这个产品图生成一套 Amazon Listing。”
+
+或：
+
+> “帮我做 H1-H5。”
+
+Agent 应自动将当前对话中的产品图片视为 Reference Image，并进入本 Skill 的标准工作流。
+
+如果用户明确要求“一键生成 / 直接生成”，直接进入 Generate Mode；否则遵循 Planning / Prompt Mode 的确认规则。
+
+### 35.5.2 用户只上传图片但没有详细描述
+
+不要要求用户重新填写完整产品信息。
+
+先通过多模态能力分析图片，再将无法确认的信息标记为 `Inferred` 或 `Unknown`。
+
+### 35.5.3 用户同时提供文字和图片
+
+图片用于确认可见产品事实，用户文字用于补充产品资料。
+
+如果图片与文字冲突：
+- 不要自行选择一个并伪装成事实；
+- 标记冲突；
+- 优先避免把冲突信息用于产品功能、参数或认证声明；
+- 必要时请求用户确认。
+
+### 35.5.4 开发 / Demo 模式
+
+`data/product/` 仍然可以保留，用于：
+- README Demo
+- 本地测试
+- 自动化测试
+- 没有当前对话附件时的开发输入
+
+但它不是正常用户必须遵循的输入方式。
+
 ## 36.0 Image Provider Detection
 
 开始 Generate Mode 前，必须检查当前环境是否存在可用的图片生成能力。
@@ -1006,28 +1155,71 @@ Provider 优先级：
 
 ## 37. 参考图片
 
-如果用户提供产品图片，使用 `--image` 参数。
+如果用户提供产品图片，优先使用当前对话上传的图片作为 Reference Image。
 
-示例：
+**不要要求用户把图片放进 `data/product/`。**
 
-python3 scripts/generate_image.py \
-  --prompt-file prompt.txt \
-  --image data/product.jpg \
-  --output-dir generated-images/product-listing
+当前项目的 `generate_image.py` 使用 `--reference-dir` 传入参考图片目录。
+
+标准 Generate Mode 调用：
+
+```bash
+python scripts/generate_image.py \
+  scripts/listing_plan.json \
+  --images H1,H2,H3,H4,H5 \
+  --reference-dir runtime/input
+```
+
+其中 `runtime/input/` 由 Agent 按需创建，并放入当前任务需要的参考图。
+
+如果用户没有提供参考图：
+
+```bash
+python scripts/generate_image.py \
+  scripts/listing_plan.json \
+  --images H1,H2,H3,H4,H5 \
+  --no-reference
+```
 
 参考图优先级高于纯文字产品描述。
 
-## 38. 单图生成
+### 37.1 Reference Image 与 Prompt 的关系
 
-示例：
+Reference Image 负责：
+- 产品身份
+- 产品形状
+- 产品颜色
+- 产品材质外观
+- Logo / artwork
+- 可见按钮、接口和结构
+- 产品比例和关键视觉细节
 
-python3 scripts/generate_image.py \
-  --prompt "clean premium product hero image" \
-  --size 1024x1024
+Prompt 负责：
+- 图片目的
+- 构图
+- 场景
+- 镜头角度
+- 光线
+- 信息层级
+- 文案
+- Campaign Style Lock
 
-如果项目脚本支持 prompt 文件，则优先使用 prompt 文件。
+不得因为 Prompt 的视觉要求而重新设计产品。
 
-## 39. 批量生成
+### 37.2 单图生成
+
+如果用户只要求生成某一张，例如 H1：
+
+```bash
+python scripts/generate_image.py \
+  scripts/listing_plan.json \
+  --images H1 \
+  --reference-dir runtime/input
+```
+
+如果没有参考图，则使用 `--no-reference`。
+
+### 37.3 批量生成
 
 用户确认后：
 
@@ -1084,14 +1276,19 @@ Amazon Listing：
 1. 读取最终 Structured Listing Plan。
 2. 读取对应 Template JSON。
 3. 检查 Image Provider 是否可用。
-4. 为每张图片生成最终 Image Prompt。
-5. 执行 Image Prompt QA。
-6. 调用图片生成能力。
-7. 保存图片和对应 metadata。
-8. 对生成结果执行 Image QA。
-9. PASS → 完成。
-10. FAIL → 进入 Prompt Repair / Retry Policy。
-11. 达到重试上限仍失败 → 停止自动循环并请求人工确认。
+4. 解析当前任务的 Reference Image。
+5. 如果 Reference Image 来自当前对话附件，确保 Agent / 脚本可以访问其实际文件路径；必要时复制到 `runtime/input/`。
+6. 为每张图片生成最终 Image Prompt。
+7. 执行 Image Prompt QA。
+8. 调用 `scripts/generate_image.py`。
+9. 如果存在 Reference Image，使用 `--reference-dir`；没有则使用 `--no-reference`。
+10. 保存图片和对应 metadata。
+11. 对生成结果执行 Image QA。
+12. PASS → 完成。
+13. FAIL → 进入 Prompt Repair / Retry Policy。
+14. 达到重试上限仍失败 → 停止自动循环并请求人工确认。
+
+除非用户主动要求，不向用户暴露内部 Python 命令、临时目录或 Provider 实现细节。
 
 不得在生成过程中无依据地修改：
 - Product Identity
@@ -1537,6 +1734,9 @@ Negative Constraints:
 - Image QA 的 Hard Fail 已经修复。
 - 自动重试没有超过 `MAX_RETRY = 3`。
 - 如果没有可用 Image Provider，不得虚构生成结果。
+- 当前对话有产品附件时，优先使用该附件，不得无故要求用户复制到 `data/product/`。
+- 如果附件无法传递给生图脚本，不得声称已经使用 Reference Image 完成 I2I。
+- `data/product/` 仅作为 Demo / 开发测试输入，不是正常用户使用的强制目录。
 
 Agent 的目标不是“尽可能生成更多内容”，
 而是“在证据约束下生成可信、统一、可执行的 Amazon Listing 视觉方案”。
